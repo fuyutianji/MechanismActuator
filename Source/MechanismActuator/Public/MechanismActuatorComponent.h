@@ -279,8 +279,17 @@ public:
 
 protected:
     virtual void InitializeComponent() override;
+    virtual void OnRegister() override;
+
+#if WITH_EDITOR
+    virtual void PostEditChangeProperty(
+        FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif
 
 private:
+#if WITH_EDITOR
+    void SyncEditorConstraintPreview();
+#endif
     UPrimitiveComponent* FindPrimitiveComponent(FName ComponentName) const;
     FVector FilterLinearTarget(const FVector& Target) const;
     FRotator MakeAngularTarget(float AngleDegrees) const;

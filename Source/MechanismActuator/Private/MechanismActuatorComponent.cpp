@@ -4,6 +4,10 @@
 #include "GameFramework/Actor.h"
 #include "PhysicsEngine/ConstraintInstance.h"
 
+#if WITH_EDITOR
+#include "Engine/World.h"
+#endif
+
 DEFINE_LOG_CATEGORY_STATIC(LogMechanismActuator, Log, All);
 
 UMechanismActuatorComponent::UMechanismActuatorComponent(
@@ -22,6 +26,54 @@ void UMechanismActuatorComponent::InitializeComponent()
         InitializeActuator();
     }
 }
+
+void UMechanismActuatorComponent::OnRegister()
+{
+#if WITH_EDITOR
+    // Keep the inherited physics-constraint visualizer in sync in Blueprint
+    // preview/editor worlds without changing either body's physical state.
+    if (!GetWorld() || !GetWorld()->IsGameWorld())
+    {
+        SyncEditorConstraintPreview();
+    }
+#endif
+
+    Super::OnRegister();
+}
+
+#if WITH_EDITOR
+void UMechanismActuatorComponent::PostEditChangeProperty(
+    FPropertyChangedEvent& PropertyChangedEvent)
+{
+    SyncEditorConstraintPreview();
+    Super::PostEditChangeProperty(PropertyChangedEvent);
+}
+
+void UMechanismActuatorComponent::SyncEditorConstraintPreview()
+{
+    ComponentName1.ComponentName = ParentComponentName;
+    ComponentName2.ComponentName = ChildComponentName;
+    ConstraintInstance.ConstraintBone1 = ParentBoneName;
+    ConstraintInstance.ConstraintBone2 = ChildBoneName;
+
+    ConfigureCommonConstraint();
+
+    switch (Mode)
+    {
+        case EMechanismActuatorMode::LinearPosition:
+            ConfigureLinearPosition();
+            break;
+        case EMechanismActuatorMode::AngularPosition:
+            ConfigureAngularPosition();
+            break;
+        case EMechanismActuatorMode::AngularVelocity:
+            ConfigureAngularVelocity();
+            break;
+        default:
+            break;
+    }
+}
+#endif
 
 UPrimitiveComponent* UMechanismActuatorComponent::FindPrimitiveComponent(
     const FName ComponentName) const

@@ -41,7 +41,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
  * Body 1 is the parent/reference body; body 2 is the moving child.
  */
 UCLASS(ClassGroup=(Mechanism), meta=(BlueprintSpawnableComponent, DisplayName="Mechanism Actuator"),
-    HideCategories=(Constraint, ConstraintComponent, Activation, Physics, Mobility,
+    HideCategories=(Activation, Physics, Mobility,
         Collision, Rendering, Navigation, Cooking, AssetUserData, Tags))
 class MECHANISMACTUATOR_API UMechanismActuatorComponent
     : public UPhysicsConstraintComponent

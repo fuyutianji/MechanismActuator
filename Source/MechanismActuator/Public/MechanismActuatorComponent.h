@@ -229,7 +229,7 @@ public:
     bool bStartActive = false;
 
     UPROPERTY(BlueprintReadOnly, Category="Mechanism|Runtime")
-    bool bIsActive = false;
+    bool bActuatorActive = false;
 
     UPROPERTY(BlueprintAssignable, Category="Mechanism|Events")
     FMechanismActuatorStateChanged OnStateChanged;
@@ -239,7 +239,7 @@ public:
 
     // Linear: extend/retract. Door: open/close. Turntable: run/stop.
     UFUNCTION(BlueprintCallable, Category="Mechanism Actuator")
-    void SetActive(bool bActive);
+    void SetActuatorActive(bool bActive);
 
     UFUNCTION(BlueprintCallable, Category="Mechanism Actuator")
     void Toggle();
@@ -272,7 +272,7 @@ public:
     UPrimitiveComponent* GetParentComponent() const;
 
     UFUNCTION(BlueprintPure, Category="Mechanism Actuator")
-    UPrimitiveComponent* GetChildComponent() const;
+    UPrimitiveComponent* GetMovingComponent() const;
 
     UFUNCTION(BlueprintPure, Category="Mechanism Actuator")
     float GetCalculatedLinearLimitCm() const;

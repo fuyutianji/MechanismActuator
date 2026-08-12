@@ -17,7 +17,7 @@ Reusable Unreal Engine C++ physics actuator component for industrial mechanisms.
 - Unselected linear axes and every angular axis are locked in Linear mode.
 - Linear limit is calculated automatically from the selected-axis target vectors.
 - Common drive, limit, projection and breakable settings are exposed; rarely used native constraint fields are hidden.
-- Blueprint functions include Set Active, Toggle, Extend, Retract, Open, Close, Set Position Alpha, Rotate Clockwise, Rotate Counter Clockwise and Stop Rotation.
+- Blueprint functions include Set Actuator Active, Toggle, Extend, Retract, Open, Close, Set Position Alpha, Rotate Clockwise, Rotate Counter Clockwise and Stop Rotation.
 
 ## Compatibility
 
@@ -77,7 +77,7 @@ Example: move one finger +2 cm along the actuator's local X axis:
 - Extended Position Cm: (2, 0, 0)
 - Auto Calculate Linear Limit: true
 
-Call `Set Active(true)` or `Extend` to extend. Call `Set Active(false)` or `Retract` to retract. `Toggle` switches between them.
+Call `Set Actuator Active(true)` or `Extend` to extend. Call `Set Actuator Active(false)` or `Retract` to retract. `Toggle` switches between them.
 
 For multiple-axis movement, select multiple axes and put the desired values in the vector. Example X=2 and Z=1 produces a limit radius of sqrt(2^2 + 1^2) = 2.236 cm.
 
@@ -92,7 +92,7 @@ Use this for a door or hinge.
 - Choose Twist X, Swing 1 Z or Swing 2 Y.
 - Closed Angle Degrees: usually 0.
 - Open Angle Degrees: for example 90.
-- Call `Open`, `Close`, `Toggle`, or `Set Active(bool)`.
+- Call `Open`, `Close`, `Toggle`, or `Set Actuator Active(bool)`.
 
 The chosen angular axis is Limited automatically; the other two angular axes and all linear axes are Locked. Angles are limited to less than 180 degrees by the underlying constraint.
 
@@ -103,7 +103,7 @@ Use this for a continuously rotating turntable or roller.
 - Choose the angular axis.
 - Set Angular Speed Degrees Per Second.
 - Use `Rotate Clockwise`, `Rotate Counter Clockwise`, and `Stop Rotation`.
-- `Set Active(true)` starts the configured default direction; `Set Active(false)` stops.
+- `Set Actuator Active(true)` starts the configured default direction; `Set Actuator Active(false)` stops.
 
 Clockwise/counter-clockwise are viewed along the selected positive local axis. Enable **Reverse Angular Direction** if the asset's authored orientation makes the direction feel inverted.
 
@@ -114,14 +114,14 @@ Use one Mechanism Actuator component per independently moving finger. A typical 
 - Left actuator: same parent, left finger as child.
 - Right actuator: same parent, right finger as child.
 - Give their Extended Position values opposite signs if they must move apart.
-- Call Set Active on both from the same custom Blueprint event.
+- Call Set Actuator Active on both from the same custom Blueprint event.
 
 One physics constraint can only have one moving child, so one actuator should not bind two child meshes.
 
 ## Runtime notes
 
 - Auto Initialize configures the constraint during component initialization.
-- Set Active and every command wakes the child rigid body.
+- Set Actuator Active and every command wakes the child rigid body.
 - Parent Dominates is optional and does not change the parent's simulation flag.
 - Max Force/Torque of 0 follows Unreal's unlimited convention.
 - If the child does not move, verify the child has collision geometry suitable for physics, is Movable, and the actuator pivot/axes are oriented correctly.

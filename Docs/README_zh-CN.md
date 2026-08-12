@@ -62,8 +62,8 @@ git -C Plugins/MechanismActuator pull origin main
 
 蓝图调用：
 
-- Extend 或 Set Active(true)：伸出；
-- Retract 或 Set Active(false)：缩回；
+- Extend 或 Set Actuator Active(true)：伸出；
+- Retract 或 Set Actuator Active(false)：缩回；
 - Toggle：切换状态；
 - Set Position Alpha：0 到 1 的连续位置。
 
@@ -80,7 +80,7 @@ git -C Plugins/MechanismActuator pull origin main
 - Open Angle Degrees 设置打开角度；
 - 其他两个角轴和全部线性轴自动锁定。
 
-调用 Open、Close、Toggle 或 Set Active(bool)。
+调用 Open、Close、Toggle 或 Set Actuator Active(bool)。
 
 ## 转盘模式
 
@@ -101,4 +101,4 @@ git -C Plugins/MechanismActuator pull origin main
 - 左执行器：Parent 选基座，Child 选左手指；
 - 右执行器：Parent 选同一基座，Child 选右手指；
 - 两个手指向相反方向时，Extended Position 使用相反的正负号；
-- 在同一个蓝图事件里依次调用两个执行器的 Set Active。
+- 在同一个蓝图事件里依次调用两个执行器的 Set Actuator Active。

@@ -1,12 +1,9 @@
 #include "MechanismActuatorComponent.h"
 
 #include "Components/PrimitiveComponent.h"
+#include "Engine/World.h"
 #include "GameFramework/Actor.h"
 #include "PhysicsEngine/ConstraintInstance.h"
-
-#if WITH_EDITOR
-#include "Engine/World.h"
-#endif
 
 DEFINE_LOG_CATEGORY_STATIC(LogMechanismActuator, Log, All);
 

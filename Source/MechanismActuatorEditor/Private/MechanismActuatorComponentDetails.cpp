@@ -9,6 +9,7 @@
 #include "Engine/SCS_Node.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "MechanismActuatorComponent.h"
+#include "Kismet2/KismetEditorUtilities.h"
 #include "PropertyHandle.h"
 #include "Widgets/Input/SComboBox.h"
 #include "Widgets/Text/STextBlock.h"
@@ -41,6 +42,9 @@ void FMechanismActuatorComponentDetails::CustomizeDetails(
 
     DetailBuilder.HideProperty(ParentProperty);
     DetailBuilder.HideProperty(ChildProperty);
+    DetailBuilder.HideCategory("Constraint");
+    DetailBuilder.HideCategory("ConstraintComponent");
+    DetailBuilder.HideCategory("Physics|Components|PhysicsConstraint");
     RebuildComponentOptions();
 
     IDetailCategoryBuilder& Category =
@@ -92,11 +96,8 @@ void FMechanismActuatorComponentDetails::RebuildComponentOptions()
         }
     }
 
-    UBlueprintGeneratedClass* GeneratedClass =
-        Component->GetTypedOuter<UBlueprintGeneratedClass>();
-    UBlueprint* Blueprint = GeneratedClass
-        ? Cast<UBlueprint>(GeneratedClass->ClassGeneratedBy)
-        : Component->GetTypedOuter<UBlueprint>();
+    UBlueprint* Blueprint =
+        FKismetEditorUtilities::FindBlueprintForObject(Component);
 
     if (Blueprint && Blueprint->SimpleConstructionScript)
     {

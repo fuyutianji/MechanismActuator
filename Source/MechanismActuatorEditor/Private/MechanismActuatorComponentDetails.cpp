@@ -9,7 +9,6 @@
 #include "Engine/SCS_Node.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "MechanismActuatorComponent.h"
-#include "Kismet2/KismetEditorUtilities.h"
 #include "PropertyHandle.h"
 #include "Widgets/Input/SComboBox.h"
 #include "Widgets/Text/STextBlock.h"
@@ -96,8 +95,19 @@ void FMechanismActuatorComponentDetails::RebuildComponentOptions()
         }
     }
 
-    UBlueprint* Blueprint =
-        FKismetEditorUtilities::FindBlueprintForObject(Component);
+    UBlueprint* Blueprint = nullptr;
+    if (const AActor* Owner = Component->GetOwner())
+    {
+        Blueprint = UBlueprint::GetBlueprintFromClass(Owner->GetClass());
+    }
+    if (!Blueprint)
+    {
+        if (const UBlueprintGeneratedClass* GeneratedClass =
+                Component->GetTypedOuter<UBlueprintGeneratedClass>())
+        {
+            Blueprint = Cast<UBlueprint>(GeneratedClass->ClassGeneratedBy);
+        }
+    }
 
     if (Blueprint && Blueprint->SimpleConstructionScript)
     {

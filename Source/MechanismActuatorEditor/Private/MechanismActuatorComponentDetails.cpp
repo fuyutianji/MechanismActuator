@@ -85,7 +85,7 @@ void FMechanismActuatorComponentDetails::RebuildComponentOptions()
         Owner->GetComponents(PrimitiveComponents);
         for (const UPrimitiveComponent* Primitive : PrimitiveComponents)
         {
-            if (Primitive && Primitive != Component)
+            if (Primitive)
             {
                 Names.Add(Primitive->GetFName());
             }
@@ -105,8 +105,7 @@ void FMechanismActuatorComponentDetails::RebuildComponentOptions()
         {
             if (Node &&
                 Node->ComponentTemplate &&
-                Node->ComponentTemplate->IsA<UPrimitiveComponent>() &&
-                Node->ComponentTemplate != Component)
+                Node->ComponentTemplate->IsA<UPrimitiveComponent>())
             {
                 Names.Add(Node->GetVariableName());
             }
@@ -117,7 +116,7 @@ void FMechanismActuatorComponentDetails::RebuildComponentOptions()
     TArray<FName> SortedNames = Names.Array();
     SortedNames.Sort([](const FName A, const FName B)
     {
-        return A.LexicalLess(B);
+        return A.ToString() < B.ToString();
     });
 
     for (const FName Name : SortedNames)
@@ -133,14 +132,21 @@ void FMechanismActuatorComponentDetails::AddComponentPicker(
     const TSharedPtr<IPropertyHandle>& Property,
     const bool bParent)
 {
-    const typename SComboBox<FNameOption>::FOnSelectionChanged SelectionDelegate =
-        bParent
-            ? SComboBox<FNameOption>::FOnSelectionChanged::CreateSP(
+    SListView<FNameOption>::FOnSelectionChanged SelectionDelegate;
+    if (bParent)
+    {
+        SelectionDelegate =
+            SListView<FNameOption>::FOnSelectionChanged::CreateSP(
                 this,
-                &FMechanismActuatorComponentDetails::OnParentChanged)
-            : SComboBox<FNameOption>::FOnSelectionChanged::CreateSP(
+                &FMechanismActuatorComponentDetails::OnParentChanged);
+    }
+    else
+    {
+        SelectionDelegate =
+            SListView<FNameOption>::FOnSelectionChanged::CreateSP(
                 this,
                 &FMechanismActuatorComponentDetails::OnChildChanged);
+    }
 
     Category.AddCustomRow(Label)
     .NameContent()

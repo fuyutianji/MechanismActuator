@@ -51,7 +51,7 @@ UPrimitiveComponent* UMechanismActuatorComponent::GetParentComponent() const
     return FindPrimitiveComponent(ParentComponentName);
 }
 
-UPrimitiveComponent* UMechanismActuatorComponent::GetChildComponent() const
+UPrimitiveComponent* UMechanismActuatorComponent::GetMovingComponent() const
 {
     return FindPrimitiveComponent(ChildComponentName);
 }
@@ -59,7 +59,7 @@ UPrimitiveComponent* UMechanismActuatorComponent::GetChildComponent() const
 bool UMechanismActuatorComponent::InitializeActuator()
 {
     UPrimitiveComponent* Parent = GetParentComponent();
-    UPrimitiveComponent* Child = GetChildComponent();
+    UPrimitiveComponent* Child = GetMovingComponent();
 
     if (!Parent || !Child)
     {
@@ -104,7 +104,7 @@ bool UMechanismActuatorComponent::InitializeActuator()
             return false;
     }
 
-    bIsActive = bStartActive;
+    bActuatorActive = bStartActive;
     ApplyCurrentState();
     return true;
 }
@@ -302,7 +302,7 @@ void UMechanismActuatorComponent::ConfigureAngularVelocity()
 
 void UMechanismActuatorComponent::WakeChild() const
 {
-    if (UPrimitiveComponent* Child = GetChildComponent())
+    if (UPrimitiveComponent* Child = GetMovingComponent())
     {
         Child->WakeAllRigidBodies();
     }
@@ -314,12 +314,12 @@ void UMechanismActuatorComponent::ApplyCurrentState()
     {
         case EMechanismActuatorMode::LinearPosition:
             SetLinearPositionTarget(FilterLinearTarget(
-                bIsActive ? ExtendedPositionCm : RetractedPositionCm));
+                bActuatorActive ? ExtendedPositionCm : RetractedPositionCm));
             break;
 
         case EMechanismActuatorMode::AngularPosition:
             SetAngularOrientationTarget(MakeAngularTarget(
-                bIsActive ? OpenAngleDegrees : ClosedAngleDegrees));
+                bActuatorActive ? OpenAngleDegrees : ClosedAngleDegrees));
             SetAngularVelocityTarget(FVector::ZeroVector);
             break;
 
@@ -332,7 +332,7 @@ void UMechanismActuatorComponent::ApplyCurrentState()
             }
 
             const float RevolutionsPerSecond =
-                bIsActive
+                bActuatorActive
                     ? Direction * AngularSpeedDegreesPerSecond / 360.0f
                     : 0.0f;
             SetAngularVelocityTarget(
@@ -348,36 +348,36 @@ void UMechanismActuatorComponent::ApplyCurrentState()
     WakeChild();
 }
 
-void UMechanismActuatorComponent::SetActive(const bool bActive)
+void UMechanismActuatorComponent::SetActuatorActive(const bool bActive)
 {
-    bIsActive = bActive;
+    bActuatorActive = bActive;
     ApplyCurrentState();
-    OnStateChanged.Broadcast(bIsActive, Mode);
+    OnStateChanged.Broadcast(bActuatorActive, Mode);
 }
 
 void UMechanismActuatorComponent::Toggle()
 {
-    SetActive(!bIsActive);
+    SetActuatorActive(!bActuatorActive);
 }
 
 void UMechanismActuatorComponent::Extend()
 {
-    SetActive(true);
+    SetActuatorActive(true);
 }
 
 void UMechanismActuatorComponent::Retract()
 {
-    SetActive(false);
+    SetActuatorActive(false);
 }
 
 void UMechanismActuatorComponent::Open()
 {
-    SetActive(true);
+    SetActuatorActive(true);
 }
 
 void UMechanismActuatorComponent::Close()
 {
-    SetActive(false);
+    SetActuatorActive(false);
 }
 
 void UMechanismActuatorComponent::SetPositionAlpha(float Alpha)
@@ -395,9 +395,9 @@ void UMechanismActuatorComponent::SetPositionAlpha(float Alpha)
             FMath::Lerp(ClosedAngleDegrees, OpenAngleDegrees, Alpha)));
     }
 
-    bIsActive = Alpha >= 0.5f;
+    bActuatorActive = Alpha >= 0.5f;
     WakeChild();
-    OnStateChanged.Broadcast(bIsActive, Mode);
+    OnStateChanged.Broadcast(bActuatorActive, Mode);
 }
 
 void UMechanismActuatorComponent::RotateClockwise()
@@ -410,7 +410,7 @@ void UMechanismActuatorComponent::RotateClockwise()
     float Direction = bReverseAngularDirection ? 1.0f : -1.0f;
     SetAngularVelocityTarget(MakeAngularVelocityTarget(
         Direction * AngularSpeedDegreesPerSecond / 360.0f));
-    bIsActive = true;
+    bActuatorActive = true;
     WakeChild();
     OnStateChanged.Broadcast(true, Mode);
 }
@@ -425,7 +425,7 @@ void UMechanismActuatorComponent::RotateCounterClockwise()
     float Direction = bReverseAngularDirection ? -1.0f : 1.0f;
     SetAngularVelocityTarget(MakeAngularVelocityTarget(
         Direction * AngularSpeedDegreesPerSecond / 360.0f));
-    bIsActive = true;
+    bActuatorActive = true;
     WakeChild();
     OnStateChanged.Broadcast(true, Mode);
 }
@@ -438,7 +438,7 @@ void UMechanismActuatorComponent::StopRotation()
     }
 
     SetAngularVelocityTarget(FVector::ZeroVector);
-    bIsActive = false;
+    bActuatorActive = false;
     WakeChild();
     OnStateChanged.Broadcast(false, Mode);
 }

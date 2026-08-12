@@ -41,8 +41,17 @@ void FMechanismActuatorComponentDetails::CustomizeDetails(
 
     DetailBuilder.HideProperty(ParentProperty);
     DetailBuilder.HideProperty(ChildProperty);
+    // UE's native PhysicsConstraint customization builds these categories before
+    // this derived-class customization runs. Hide them here (instead of class
+    // metadata) so the native customization can safely initialize its handles.
     DetailBuilder.HideCategory("Constraint");
     DetailBuilder.HideCategory("ConstraintComponent");
+    DetailBuilder.HideCategory("ConstraintTransforms");
+    DetailBuilder.HideCategory("Constraint Behavior");
+    DetailBuilder.HideCategory("Linear Limits");
+    DetailBuilder.HideCategory("Angular Limits");
+    DetailBuilder.HideCategory("LinearMotor");
+    DetailBuilder.HideCategory("AngularMotor");
     DetailBuilder.HideCategory("Physics|Components|PhysicsConstraint");
     RebuildComponentOptions();
 

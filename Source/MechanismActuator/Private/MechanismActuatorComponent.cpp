@@ -100,7 +100,7 @@ bool UMechanismActuatorComponent::InitializeActuator()
             ConfigureAngularVelocity();
             break;
         default:
-            ensureNoEntry();
+            UE_LOG(LogMechanismActuator, Error, TEXT("%s: Invalid actuator mode."), *GetPathName());
             return false;
     }
 
@@ -341,7 +341,7 @@ void UMechanismActuatorComponent::ApplyCurrentState()
         }
 
         default:
-            ensureNoEntry();
+            UE_LOG(LogMechanismActuator, Error, TEXT("%s: Invalid actuator mode."), *GetPathName());
             break;
     }
 

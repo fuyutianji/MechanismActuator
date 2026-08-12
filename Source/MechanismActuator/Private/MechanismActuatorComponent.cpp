@@ -19,11 +19,29 @@ UMechanismActuatorComponent::UMechanismActuatorComponent(
 
 void UMechanismActuatorComponent::InitializeComponent()
 {
+    UWorld* World = GetWorld();
+
+#if WITH_EDITOR
+    if (!World || !World->IsGameWorld())
+    {
+        // The base implementation calls InitComponentConstraint directly.
+        // Prevent that call from resolving preview bodies.
+        const FName PreviewComponentName1 = ComponentName1.ComponentName;
+        const FName PreviewComponentName2 = ComponentName2.ComponentName;
+        ComponentName1.ComponentName = NAME_None;
+        ComponentName2.ComponentName = NAME_None;
+
+        Super::InitializeComponent();
+
+        ComponentName1.ComponentName = PreviewComponentName1;
+        ComponentName2.ComponentName = PreviewComponentName2;
+        SyncEditorConstraintPreview();
+        return;
+    }
+#endif
+
     Super::InitializeComponent();
 
-    // Blueprint preview worlds also register and initialize components. Never
-    // change child physics state or create an actuator constraint there.
-    UWorld* World = GetWorld();
     if (bAutoInitialize && World && World->IsGameWorld())
     {
         InitializeActuator();

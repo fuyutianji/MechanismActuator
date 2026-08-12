@@ -9,8 +9,7 @@ class IPropertyHandle;
 class UMechanismActuatorComponent;
 
 class FMechanismActuatorComponentDetails final
-    : public IDetailCustomization,
-      public TSharedFromThis<FMechanismActuatorComponentDetails>
+    : public IDetailCustomization
 {
 public:
     static TSharedRef<IDetailCustomization> MakeInstance();

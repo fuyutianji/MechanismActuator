@@ -21,7 +21,10 @@ void UMechanismActuatorComponent::InitializeComponent()
 {
     Super::InitializeComponent();
 
-    if (bAutoInitialize)
+    // Blueprint preview worlds also register and initialize components. Never
+    // change child physics state or create an actuator constraint there.
+    UWorld* World = GetWorld();
+    if (bAutoInitialize && World && World->IsGameWorld())
     {
         InitializeActuator();
     }
@@ -30,11 +33,23 @@ void UMechanismActuatorComponent::InitializeComponent()
 void UMechanismActuatorComponent::OnRegister()
 {
 #if WITH_EDITOR
-    // Keep the inherited physics-constraint visualizer in sync in Blueprint
-    // preview/editor worlds without changing either body's physical state.
-    if (!GetWorld() || !GetWorld()->IsGameWorld())
+    UWorld* World = GetWorld();
+    if (!World || !World->IsGameWorld())
     {
+        // UPhysicsConstraintComponent::OnRegister creates a live constraint when
+        // body names are present. Hide the preview-only references until the base
+        // registration has finished, then restore them for its visualizer.
+        const FName PreviewComponentName1 = ComponentName1.ComponentName;
+        const FName PreviewComponentName2 = ComponentName2.ComponentName;
+        ComponentName1.ComponentName = NAME_None;
+        ComponentName2.ComponentName = NAME_None;
+
+        Super::OnRegister();
+
+        ComponentName1.ComponentName = PreviewComponentName1;
+        ComponentName2.ComponentName = PreviewComponentName2;
         SyncEditorConstraintPreview();
+        return;
     }
 #endif
 

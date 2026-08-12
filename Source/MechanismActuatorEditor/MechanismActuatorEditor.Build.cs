@@ -11,6 +11,7 @@ public class MechanismActuatorEditor : ModuleRules
             "Core",
             "CoreUObject",
             "Engine",
+            "InputCore",
             "MechanismActuator",
             "PropertyEditor",
             "Slate",

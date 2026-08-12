@@ -1,12 +1,9 @@
 #include "MechanismActuatorComponent.h"
 
 #include "Components/PrimitiveComponent.h"
+#include "Engine/World.h"
 #include "GameFramework/Actor.h"
 #include "PhysicsEngine/ConstraintInstance.h"
-
-#if WITH_EDITOR
-#include "Engine/World.h"
-#endif
 
 DEFINE_LOG_CATEGORY_STATIC(LogMechanismActuator, Log, All);
 
@@ -19,9 +16,30 @@ UMechanismActuatorComponent::UMechanismActuatorComponent(
 
 void UMechanismActuatorComponent::InitializeComponent()
 {
+    UWorld* World = GetWorld();
+
+#if WITH_EDITOR
+    if (!World || !World->IsGameWorld())
+    {
+        // The base implementation calls InitComponentConstraint directly.
+        // Prevent that call from resolving preview bodies.
+        const FName PreviewComponentName1 = ComponentName1.ComponentName;
+        const FName PreviewComponentName2 = ComponentName2.ComponentName;
+        ComponentName1.ComponentName = NAME_None;
+        ComponentName2.ComponentName = NAME_None;
+
+        Super::InitializeComponent();
+
+        ComponentName1.ComponentName = PreviewComponentName1;
+        ComponentName2.ComponentName = PreviewComponentName2;
+        SyncEditorConstraintPreview();
+        return;
+    }
+#endif
+
     Super::InitializeComponent();
 
-    if (bAutoInitialize)
+    if (bAutoInitialize && World && World->IsGameWorld())
     {
         InitializeActuator();
     }
@@ -30,11 +48,23 @@ void UMechanismActuatorComponent::InitializeComponent()
 void UMechanismActuatorComponent::OnRegister()
 {
 #if WITH_EDITOR
-    // Keep the inherited physics-constraint visualizer in sync in Blueprint
-    // preview/editor worlds without changing either body's physical state.
-    if (!GetWorld() || !GetWorld()->IsGameWorld())
+    UWorld* World = GetWorld();
+    if (!World || !World->IsGameWorld())
     {
+        // UPhysicsConstraintComponent::OnRegister creates a live constraint when
+        // body names are present. Hide the preview-only references until the base
+        // registration has finished, then restore them for its visualizer.
+        const FName PreviewComponentName1 = ComponentName1.ComponentName;
+        const FName PreviewComponentName2 = ComponentName2.ComponentName;
+        ComponentName1.ComponentName = NAME_None;
+        ComponentName2.ComponentName = NAME_None;
+
+        Super::OnRegister();
+
+        ComponentName1.ComponentName = PreviewComponentName1;
+        ComponentName2.ComponentName = PreviewComponentName2;
         SyncEditorConstraintPreview();
+        return;
     }
 #endif
 

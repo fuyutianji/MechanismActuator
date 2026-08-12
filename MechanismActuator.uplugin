@@ -1,0 +1,23 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "0.1.0",
+  "FriendlyName": "Mechanism Actuator",
+  "Description": "Reusable physics-constraint actuators for linear motion, hinged motion and continuous rotation.",
+  "Category": "Physics",
+  "CreatedBy": "fuyutianji",
+  "CanContainContent": false,
+  "IsBetaVersion": true,
+  "Modules": [
+    {
+      "Name": "MechanismActuator",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    },
+    {
+      "Name": "MechanismActuatorEditor",
+      "Type": "Editor",
+      "LoadingPhase": "Default"
+    }
+  ]
+}

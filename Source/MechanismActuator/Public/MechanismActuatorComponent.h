@@ -1,3 +1,5 @@
+// Main APIs: configure actuator constraints, command motion, freeze the moving
+// component in its current pose, and restore physics-driven constraint motion.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -12,6 +14,27 @@ enum class EMechanismActuatorMode : uint8
     LinearPosition UMETA(DisplayName="Linear Position"),
     AngularPosition UMETA(DisplayName="Angular Position (Door/Hinge)"),
     AngularVelocity UMETA(DisplayName="Angular Velocity (Turntable)")
+};
+
+UENUM(BlueprintType)
+enum class EMechanismLinearState : uint8
+{
+    Retracted UMETA(DisplayName="Retracted"),
+    Extended UMETA(DisplayName="Extended")
+};
+
+UENUM(BlueprintType)
+enum class EMechanismAngularPositionState : uint8
+{
+    Closed UMETA(DisplayName="Closed"),
+    Open UMETA(DisplayName="Open")
+};
+
+UENUM(BlueprintType)
+enum class EMechanismAngularVelocityState : uint8
+{
+    Stopped UMETA(DisplayName="Stopped"),
+    Running UMETA(DisplayName="Running")
 };
 
 UENUM(BlueprintType, meta=(Bitflags, UseEnumValuesAsMaskValuesInEditor="true"))
@@ -231,11 +254,47 @@ public:
     UPROPERTY(BlueprintReadOnly, Category="Mechanism|Runtime")
     bool bActuatorActive = false;
 
+    // Commanded state for Linear Position mode.
+    UPROPERTY(BlueprintReadOnly, Transient, Category="Mechanism|Runtime|State")
+    EMechanismLinearState LinearState = EMechanismLinearState::Retracted;
+
+    // Commanded state for Angular Position mode.
+    UPROPERTY(BlueprintReadOnly, Transient, Category="Mechanism|Runtime|State")
+    EMechanismAngularPositionState AngularPositionState =
+        EMechanismAngularPositionState::Closed;
+
+    // Commanded state for Angular Velocity mode.
+    UPROPERTY(BlueprintReadOnly, Transient, Category="Mechanism|Runtime|State")
+    EMechanismAngularVelocityState AngularVelocityState =
+        EMechanismAngularVelocityState::Stopped;
+
+    // True after this component instance has successfully configured its
+    // constraint. Repeated Initialize Actuator calls are ignored until the
+    // component is uninitialized or Reinitialize Actuator is called.
+    UPROPERTY(BlueprintReadOnly, Transient, Category="Mechanism|Runtime")
+    bool bActuatorInitialized = false;
+
+    // True while Freeze Component has replaced physics motion with a Keep World
+    // attachment to the configured parent component.
+    UPROPERTY(BlueprintReadOnly, Transient, Category="Mechanism|Runtime")
+    bool bComponentFrozen = false;
+
+    // Compatibility state for Blueprints created before Freeze Component was
+    // introduced. Use Is Component Frozen for new graphs.
+    UPROPERTY(BlueprintReadOnly, Transient, Category="Mechanism|Runtime",
+        meta=(DeprecatedProperty,
+        DeprecationMessage="Use Is Component Frozen instead."))
+    bool bComponentSleepFrozen = false;
+
     UPROPERTY(BlueprintAssignable, Category="Mechanism|Events")
     FMechanismActuatorStateChanged OnStateChanged;
 
     UFUNCTION(BlueprintCallable, Category="Mechanism Actuator")
     bool InitializeActuator();
+
+    /** Explicitly rebuilds an already initialized actuator. */
+    UFUNCTION(BlueprintCallable, Category="Mechanism Actuator")
+    bool ReinitializeActuator();
 
     // Linear: extend/retract. Door: open/close. Turntable: run/stop.
     UFUNCTION(BlueprintCallable, Category="Mechanism Actuator")
@@ -268,6 +327,51 @@ public:
     UFUNCTION(BlueprintCallable, Category="Mechanism Actuator")
     void StopRotation();
 
+    /**
+     * Freezes the moving component at its current pose without future wake
+     * events. Physics simulation is disabled, the constraint is broken, and
+     * the component is attached to the configured parent using Keep World.
+     */
+    UFUNCTION(BlueprintCallable, Category="Mechanism Actuator|Freeze",
+        meta=(DisplayName="Freeze Component"))
+    void FreezeComponent();
+
+    /**
+     * Restores the state saved by Freeze Component, rebuilds the configured
+     * constraint at the current pose, reapplies the drive state, and wakes the
+     * moving rigid body.
+     */
+    UFUNCTION(BlueprintCallable, Category="Mechanism Actuator|Freeze",
+        meta=(DisplayName="Unfreeze Component"))
+    void UnfreezeComponent();
+
+    /** Returns whether this actuator has frozen its moving component. */
+    UFUNCTION(BlueprintPure, Category="Mechanism Actuator|Freeze",
+        meta=(DisplayName="Is Component Frozen"))
+    bool IsComponentFrozen() const;
+
+    UFUNCTION(BlueprintPure, Category="Mechanism Actuator|State")
+    EMechanismLinearState GetLinearState() const;
+
+    UFUNCTION(BlueprintPure, Category="Mechanism Actuator|State")
+    EMechanismAngularPositionState GetAngularPositionState() const;
+
+    UFUNCTION(BlueprintPure, Category="Mechanism Actuator|State")
+    EMechanismAngularVelocityState GetAngularVelocityState() const;
+
+    // Deprecated compatibility nodes keep existing Blueprint assets loadable.
+    UFUNCTION(BlueprintCallable, Category="Mechanism Actuator|Freeze",
+        meta=(DeprecatedFunction,
+        DeprecationMessage="Use Freeze Component instead.",
+        BlueprintInternalUseOnly="true"))
+    bool SleepComponent();
+
+    UFUNCTION(BlueprintCallable, Category="Mechanism Actuator|Freeze",
+        meta=(DeprecatedFunction,
+        DeprecationMessage="Use Unfreeze Component instead.",
+        BlueprintInternalUseOnly="true"))
+    bool WakeComponent();
+
     UFUNCTION(BlueprintPure, Category="Mechanism Actuator")
     UPrimitiveComponent* GetParentComponent() const;
 
@@ -279,6 +383,7 @@ public:
 
 protected:
     virtual void InitializeComponent() override;
+    virtual void UninitializeComponent() override;
     virtual void OnRegister() override;
 
 #if WITH_EDITOR
@@ -298,7 +403,26 @@ private:
     void ConfigureLinearPosition();
     void ConfigureAngularPosition();
     void ConfigureAngularVelocity();
+    bool EnsureConstraintFrameOnParent(
+        UPrimitiveComponent* Parent, UPrimitiveComponent* Child);
+    bool ConfigureConstraintForBodies(
+        UPrimitiveComponent* Parent, UPrimitiveComponent* Child);
     void ApplyCurrentState();
+    void UpdateExposedStates();
     void WakeChild() const;
+    void SetComponentFrozen(bool bFrozen);
+    bool FreezeComponentInternal();
+    bool UnfreezeComponentInternal();
     bool UsesLinearAxis(EMechanismLinearAxis Axis) const;
+
+    bool bSavedChildSimulatePhysics = true;
+    bool bSavedChildEnableGravity = false;
+    bool bSavedGenerateWakeEvents = false;
+    bool bHasSavedConstraintState = false;
+    FTransform SavedConstraintFrame1 = FTransform::Identity;
+    FTransform SavedConstraintFrame2 = FTransform::Identity;
+    FVector SavedLinearPositionTarget = FVector::ZeroVector;
+    FVector SavedLinearVelocityTarget = FVector::ZeroVector;
+    FRotator SavedAngularOrientationTarget = FRotator::ZeroRotator;
+    FVector SavedAngularVelocityTarget = FVector::ZeroVector;
 };

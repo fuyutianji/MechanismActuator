@@ -1,8 +1,11 @@
+// Implements actuator setup/commands plus reversible freeze and unfreeze
+// restoration for the configured moving component.
 #include "MechanismActuatorComponent.h"
 
 #include "Components/PrimitiveComponent.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
+#include "PhysicsEngine/BodyInstance.h"
 #include "PhysicsEngine/ConstraintInstance.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogMechanismActuator, Log, All);
@@ -43,6 +46,16 @@ void UMechanismActuatorComponent::InitializeComponent()
     {
         InitializeActuator();
     }
+}
+
+void UMechanismActuatorComponent::UninitializeComponent()
+{
+    // A later InitializeComponent call belongs to a new component lifecycle and
+    // must be allowed to configure the constraint again.
+    bActuatorInitialized = false;
+    SetComponentFrozen(false);
+    bHasSavedConstraintState = false;
+    Super::UninitializeComponent();
 }
 
 void UMechanismActuatorComponent::OnRegister()
@@ -140,6 +153,22 @@ UPrimitiveComponent* UMechanismActuatorComponent::GetMovingComponent() const
 
 bool UMechanismActuatorComponent::InitializeActuator()
 {
+    if (bComponentFrozen)
+    {
+        UE_LOG(LogMechanismActuator, Verbose,
+            TEXT("%s: Initialize Actuator ignored while the moving component is frozen."),
+            *GetPathName());
+        return true;
+    }
+
+    if (bActuatorInitialized)
+    {
+        UE_LOG(LogMechanismActuator, Verbose,
+            TEXT("%s: Duplicate Initialize Actuator call ignored for this component instance."),
+            *GetPathName());
+        return true;
+    }
+
     UPrimitiveComponent* Parent = GetParentComponent();
     UPrimitiveComponent* Child = GetMovingComponent();
 
@@ -158,15 +187,90 @@ bool UMechanismActuatorComponent::InitializeActuator()
         return false;
     }
 
+    EnsureConstraintFrameOnParent(Parent, Child);
+
     // Deliberately do not modify any parent physical state.
     if (bForceChildMovable && Child->Mobility != EComponentMobility::Movable)
     {
         Child->SetMobility(EComponentMobility::Movable);
     }
+    // Apply the configured initial child state once per component lifecycle.
+    // The idempotent initialization guard prevents later duplicate calls from
+    // overriding gameplay changes to simulation or gravity.
     Child->SetSimulatePhysics(bChildSimulatePhysics);
     Child->SetEnableGravity(bChildEnableGravity);
 
-    // Frame is captured from the current component transforms here.
+    if (!ConfigureConstraintForBodies(Parent, Child))
+    {
+        return false;
+    }
+
+    bActuatorInitialized = true;
+    SetComponentFrozen(false);
+    bActuatorActive = bStartActive;
+    UpdateExposedStates();
+    ApplyCurrentState();
+    return true;
+}
+
+bool UMechanismActuatorComponent::ReinitializeActuator()
+{
+    if (bComponentFrozen)
+    {
+        UE_LOG(LogMechanismActuator, Warning,
+            TEXT("%s: Reinitialize Actuator is not allowed while the moving component is frozen. Call Unfreeze Component first."),
+            *GetPathName());
+        return false;
+    }
+
+    bActuatorInitialized = false;
+    return InitializeActuator();
+}
+
+bool UMechanismActuatorComponent::EnsureConstraintFrameOnParent(
+    UPrimitiveComponent* Parent, UPrimitiveComponent* Child)
+{
+    if (!IsValid(Parent) || !IsValid(Child) || !IsAttachedTo(Child))
+    {
+        return true;
+    }
+
+    // A constraint component under its simulated child inherits the child's
+    // solved motion. Keep the authored world-space pivot but move the component
+    // into the stable parent hierarchy before creating or rebuilding the joint.
+    const bool bAttached = AttachToComponent(
+        Parent,
+        FAttachmentTransformRules::KeepWorldTransform,
+        NAME_None);
+
+    if (bAttached)
+    {
+        UE_LOG(LogMechanismActuator, Log,
+            TEXT("%s: Constraint component was attached below moving Child '%s'; runtime reparent to Parent '%s' succeeded."),
+            *GetPathName(), *Child->GetName(), *Parent->GetName());
+    }
+    else
+    {
+        UE_LOG(LogMechanismActuator, Error,
+            TEXT("%s: Constraint component was attached below moving Child '%s'; runtime reparent to Parent '%s' failed."),
+            *GetPathName(), *Child->GetName(), *Parent->GetName());
+    }
+    return bAttached;
+}
+
+bool UMechanismActuatorComponent::ConfigureConstraintForBodies(
+    UPrimitiveComponent* Parent, UPrimitiveComponent* Child)
+{
+    if (!IsValid(Parent) || !IsValid(Child) || Parent == Child)
+    {
+        UE_LOG(LogMechanismActuator, Error,
+            TEXT("%s: Cannot configure constraint with invalid bodies."),
+            *GetPathName());
+        return false;
+    }
+
+    // The constraint component transform supplies the joint frame. Rebuilding
+    // here also refreshes body handles after SetSimulatePhysics recreated them.
     SetConstrainedComponents(Parent, ParentBoneName, Child, ChildBoneName);
     ConfigureCommonConstraint();
 
@@ -182,12 +286,11 @@ bool UMechanismActuatorComponent::InitializeActuator()
             ConfigureAngularVelocity();
             break;
         default:
-            UE_LOG(LogMechanismActuator, Error, TEXT("%s: Invalid actuator mode."), *GetPathName());
+            UE_LOG(LogMechanismActuator, Error,
+                TEXT("%s: Invalid actuator mode."), *GetPathName());
             return false;
     }
 
-    bActuatorActive = bStartActive;
-    ApplyCurrentState();
     return true;
 }
 
@@ -384,10 +487,57 @@ void UMechanismActuatorComponent::ConfigureAngularVelocity()
 
 void UMechanismActuatorComponent::WakeChild() const
 {
-    if (UPrimitiveComponent* Child = GetMovingComponent())
+    if (bComponentFrozen)
+    {
+        return;
+    }
+
+    if (UPrimitiveComponent* Child = GetMovingComponent();
+        IsValid(Child) && Child->IsSimulatingPhysics())
     {
         Child->WakeAllRigidBodies();
     }
+}
+
+void UMechanismActuatorComponent::SetComponentFrozen(const bool bFrozen)
+{
+    bComponentFrozen = bFrozen;
+    bComponentSleepFrozen = bFrozen;
+}
+
+void UMechanismActuatorComponent::UpdateExposedStates()
+{
+    LinearState = bActuatorActive
+        ? EMechanismLinearState::Extended
+        : EMechanismLinearState::Retracted;
+    AngularPositionState = bActuatorActive
+        ? EMechanismAngularPositionState::Open
+        : EMechanismAngularPositionState::Closed;
+    AngularVelocityState = bActuatorActive
+        ? EMechanismAngularVelocityState::Running
+        : EMechanismAngularVelocityState::Stopped;
+}
+
+EMechanismLinearState UMechanismActuatorComponent::GetLinearState() const
+{
+    return LinearState;
+}
+
+EMechanismAngularPositionState
+UMechanismActuatorComponent::GetAngularPositionState() const
+{
+    return AngularPositionState;
+}
+
+EMechanismAngularVelocityState
+UMechanismActuatorComponent::GetAngularVelocityState() const
+{
+    return AngularVelocityState;
+}
+
+bool UMechanismActuatorComponent::IsComponentFrozen() const
+{
+    return bComponentFrozen;
 }
 
 void UMechanismActuatorComponent::ApplyCurrentState()
@@ -433,6 +583,7 @@ void UMechanismActuatorComponent::ApplyCurrentState()
 void UMechanismActuatorComponent::SetActuatorActive(const bool bActive)
 {
     bActuatorActive = bActive;
+    UpdateExposedStates();
     ApplyCurrentState();
     OnStateChanged.Broadcast(bActuatorActive, Mode);
 }
@@ -478,6 +629,7 @@ void UMechanismActuatorComponent::SetPositionAlpha(float Alpha)
     }
 
     bActuatorActive = Alpha >= 0.5f;
+    UpdateExposedStates();
     WakeChild();
     OnStateChanged.Broadcast(bActuatorActive, Mode);
 }
@@ -493,6 +645,7 @@ void UMechanismActuatorComponent::RotateClockwise()
     SetAngularVelocityTarget(MakeAngularVelocityTarget(
         Direction * AngularSpeedDegreesPerSecond / 360.0f));
     bActuatorActive = true;
+    UpdateExposedStates();
     WakeChild();
     OnStateChanged.Broadcast(true, Mode);
 }
@@ -508,6 +661,7 @@ void UMechanismActuatorComponent::RotateCounterClockwise()
     SetAngularVelocityTarget(MakeAngularVelocityTarget(
         Direction * AngularSpeedDegreesPerSecond / 360.0f));
     bActuatorActive = true;
+    UpdateExposedStates();
     WakeChild();
     OnStateChanged.Broadcast(true, Mode);
 }
@@ -521,6 +675,227 @@ void UMechanismActuatorComponent::StopRotation()
 
     SetAngularVelocityTarget(FVector::ZeroVector);
     bActuatorActive = false;
+    UpdateExposedStates();
     WakeChild();
     OnStateChanged.Broadcast(false, Mode);
+}
+
+void UMechanismActuatorComponent::FreezeComponent()
+{
+    FreezeComponentInternal();
+}
+
+bool UMechanismActuatorComponent::FreezeComponentInternal()
+{
+    if (bComponentFrozen)
+    {
+        return true;
+    }
+
+    UPrimitiveComponent* Parent = GetParentComponent();
+    UPrimitiveComponent* Child = GetMovingComponent();
+    if (!IsValid(Parent) || !IsValid(Child) || Parent == Child)
+    {
+        UE_LOG(LogMechanismActuator, Error,
+            TEXT("%s: Freeze Component requires valid, different Parent and Child components."),
+            *GetPathName());
+        return false;
+    }
+
+    if (!Child->IsSimulatingPhysics())
+    {
+        UE_LOG(LogMechanismActuator, Warning,
+            TEXT("%s: Freeze Component ignored because Child '%s' is not simulating physics."),
+            *GetPathName(), *Child->GetName());
+        return false;
+    }
+
+    EnsureConstraintFrameOnParent(Parent, Child);
+
+    // SetConstrainedComponents rebuilds both local reference frames from the
+    // bodies' current transforms. Preserve the original frames and live drive
+    // targets so Unfreeze Component does not redefine the current position as the
+    // new constraint-space origin.
+    bHasSavedConstraintState = ConstraintInstance.IsValidConstraintInstance()
+        && !ConstraintInstance.IsTerminated();
+    if (bHasSavedConstraintState)
+    {
+        SavedConstraintFrame1 = ConstraintInstance.GetRefFrame(
+            EConstraintFrame::Frame1);
+        SavedConstraintFrame2 = ConstraintInstance.GetRefFrame(
+            EConstraintFrame::Frame2);
+        SavedLinearPositionTarget =
+            ConstraintInstance.GetLinearPositionTarget();
+        SavedLinearVelocityTarget =
+            ConstraintInstance.GetLinearVelocityTarget();
+        SavedAngularOrientationTarget =
+            ConstraintInstance.GetAngularOrientationTarget();
+        SavedAngularVelocityTarget =
+            ConstraintInstance.GetAngularVelocityTarget();
+    }
+
+    FTransform SleepWorldTransform = Child->GetComponentTransform();
+    const FVector SleepWorldScale = SleepWorldTransform.GetScale3D();
+    if (FBodyInstance* ChildBody = Child->GetBodyInstance(ChildBoneName);
+        ChildBody && ChildBody->IsValidBodyInstance())
+    {
+        // Physics delegates can run before the component transform has caught
+        // up with the final solver pose. Read position and rotation from the
+        // rigid body, but preserve component scale because the Chaos body
+        // transform does not reliably contain the scene-component scale.
+        SleepWorldTransform = ChildBody->GetUnrealWorldTransform();
+        SleepWorldTransform.SetScale3D(SleepWorldScale);
+    }
+
+    bSavedChildSimulatePhysics = Child->IsSimulatingPhysics();
+    bSavedChildEnableGravity = Child->IsGravityEnabled();
+    bSavedGenerateWakeEvents = Child->BodyInstance.bGenerateWakeEvents;
+    SetComponentFrozen(true);
+
+    // Disable notifications before destroying the rigid body. Breaking the
+    // constraint afterwards cannot wake a body that no longer simulates.
+    Child->BodyInstance.bGenerateWakeEvents = false;
+    Child->SetSimulatePhysics(false);
+    BreakConstraint();
+
+    // SetSimulatePhysics(false) does not restore the attachment that Unreal
+    // removed when simulation was enabled. Keep World preserves the solved pose.
+    if (Child->GetAttachParent())
+    {
+        Child->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
+    }
+
+    Child->SetWorldTransform(
+        SleepWorldTransform, false, nullptr, ETeleportType::TeleportPhysics);
+
+    FName SleepAttachSocketName = ParentBoneName;
+    if (!SleepAttachSocketName.IsNone()
+        && !Parent->DoesSocketExist(SleepAttachSocketName))
+    {
+        UE_LOG(LogMechanismActuator, Warning,
+            TEXT("%s: Parent '%s' has no socket or bone '%s'; sleeping Child will attach to the component root."),
+            *GetPathName(), *Parent->GetName(),
+            *SleepAttachSocketName.ToString());
+        SleepAttachSocketName = NAME_None;
+    }
+
+    bool bAttached = Child->AttachToComponent(
+        Parent,
+        FAttachmentTransformRules::KeepWorldTransform,
+        SleepAttachSocketName);
+
+    if (!bAttached || Child->GetAttachParent() != Parent)
+    {
+        // Retry from a clean hierarchy without a socket. This also handles
+        // stale runtime attachment state left behind by physics detachment.
+        Child->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
+        bAttached = Child->AttachToComponent(
+            Parent,
+            FAttachmentTransformRules::KeepWorldTransform,
+            NAME_None);
+    }
+
+    // A frozen component must never be allowed to become dynamic,
+    // including when another plugin command ran during the attachment update.
+    Child->BodyInstance.bGenerateWakeEvents = false;
+    Child->SetSimulatePhysics(false);
+
+    if (!bAttached || Child->GetAttachParent() != Parent)
+    {
+        UE_LOG(LogMechanismActuator, Error,
+            TEXT("%s: Failed to attach frozen Child '%s' to Parent '%s'. Physics remains disabled; call Unfreeze Component to restore it."),
+            *GetPathName(), *Child->GetName(), *Parent->GetName());
+        return false;
+    }
+
+    UE_LOG(LogMechanismActuator, Log,
+        TEXT("%s: Froze Child '%s' on Parent '%s'. Simulating=%s, Attached=%s."),
+        *GetPathName(),
+        *Child->GetName(),
+        *Parent->GetName(),
+        Child->IsSimulatingPhysics() ? TEXT("true") : TEXT("false"),
+        Child->GetAttachParent() == Parent ? TEXT("true") : TEXT("false"));
+
+    return true;
+}
+
+void UMechanismActuatorComponent::UnfreezeComponent()
+{
+    UnfreezeComponentInternal();
+}
+
+bool UMechanismActuatorComponent::UnfreezeComponentInternal()
+{
+    if (!bComponentFrozen)
+    {
+        UE_LOG(LogMechanismActuator, Verbose,
+            TEXT("%s: Unfreeze Component ignored because the moving component is not frozen."),
+            *GetPathName());
+        return false;
+    }
+
+    UPrimitiveComponent* Parent = GetParentComponent();
+    UPrimitiveComponent* Child = GetMovingComponent();
+    if (!IsValid(Parent) || !IsValid(Child) || Parent == Child)
+    {
+        UE_LOG(LogMechanismActuator, Error,
+            TEXT("%s: Unfreeze Component requires valid, different Parent and Child components."),
+            *GetPathName());
+        return false;
+    }
+
+    // Detach before recreating the rigid body. Keep World means the mechanism
+    // resumes from the exact pose reached while it followed the parent.
+    Child->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
+    Child->BodyInstance.bGenerateWakeEvents = bSavedGenerateWakeEvents;
+    Child->SetSimulatePhysics(bSavedChildSimulatePhysics);
+    Child->SetEnableGravity(bSavedChildEnableGravity);
+    SetComponentFrozen(false);
+
+    if (!bSavedChildSimulatePhysics)
+    {
+        UE_LOG(LogMechanismActuator, Warning,
+            TEXT("%s: Unfreeze Component restored a non-simulating Child; no constraint was created."),
+            *GetPathName());
+        return true;
+    }
+
+    if (!ConfigureConstraintForBodies(Parent, Child))
+    {
+        bActuatorInitialized = false;
+        return false;
+    }
+
+    bActuatorInitialized = true;
+    if (bHasSavedConstraintState)
+    {
+        // SetConstrainedComponents sampled new frames from the frozen pose.
+        // Restore the pre-freeze local frames before reapplying the exact live
+        // targets that were active when the component was frozen.
+        SetConstraintReferenceFrame(
+            EConstraintFrame::Frame1, SavedConstraintFrame1);
+        SetConstraintReferenceFrame(
+            EConstraintFrame::Frame2, SavedConstraintFrame2);
+        SetLinearPositionTarget(SavedLinearPositionTarget);
+        SetLinearVelocityTarget(SavedLinearVelocityTarget);
+        SetAngularOrientationTarget(SavedAngularOrientationTarget);
+        SetAngularVelocityTarget(SavedAngularVelocityTarget);
+        bHasSavedConstraintState = false;
+        WakeChild();
+    }
+    else
+    {
+        ApplyCurrentState();
+    }
+    return true;
+}
+
+bool UMechanismActuatorComponent::SleepComponent()
+{
+    return FreezeComponentInternal();
+}
+
+bool UMechanismActuatorComponent::WakeComponent()
+{
+    return UnfreezeComponentInternal();
 }

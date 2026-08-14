@@ -17,7 +17,7 @@ Reusable Unreal Engine C++ physics actuator component for industrial mechanisms.
 - Unselected linear axes and every angular axis are locked in Linear mode.
 - Linear limit is calculated automatically from the selected-axis target vectors.
 - Common drive, limit, projection and breakable settings are exposed; rarely used native constraint fields are hidden.
-- Blueprint functions include Set Actuator Active, Toggle, Extend, Retract, Open, Close, Set Position Alpha, Rotate Clockwise, Rotate Counter Clockwise and Stop Rotation.
+- Blueprint functions include Set Actuator Active, Toggle, Extend, Retract, Open, Close, Set Position Alpha, Rotate Clockwise, Rotate Counter Clockwise, Stop Rotation, Initialize Actuator, Reinitialize Actuator, Freeze Component, Unfreeze Component and Is Component Frozen.
 
 ## Compatibility
 
@@ -53,7 +53,9 @@ Then:
 1. Open the equipment Actor Blueprint.
 2. Delete/disable the old Physics Constraint only after the new actuator has been tested.
 3. Add **Mechanism Actuator** from the Components panel.
-4. Position and rotate the actuator component at the desired constraint pivot. Its local axes define the actuator axes.
+4. Attach the actuator component under the reference/root component, not under
+   the simulated moving child. Position and rotate it at the desired constraint
+   pivot. Its local axes define the actuator axes.
 5. In **Connection**:
    - **Parent Component**: select the reference/fixed component.
    - **Child Component**: select the moving component.
@@ -61,6 +63,10 @@ Then:
    - Force Child Movable: true
    - Child Simulate Physics: true
    - Child Enable Gravity: false
+
+   These settings are applied during the first successful initialization of
+   each component lifecycle. Later runtime physics and gravity changes are not
+   overwritten by duplicate Initialize Actuator calls.
 7. Compile the Blueprint.
 
 The dropdowns intentionally only show primitive components owned by the same Blueprint/Actor. They do not require manually typing a Static Mesh component name.
@@ -120,8 +126,34 @@ One physics constraint can only have one moving child, so one actuator should no
 
 ## Runtime notes
 
-- Auto Initialize configures the constraint during component initialization.
+- Auto Initialize configures the constraint once per component lifecycle.
+- Initialize Actuator is idempotent: repeated calls on the same initialized
+  component instance do nothing. Use Reinitialize Actuator only when an
+  intentional constraint rebuild is required.
 - Set Actuator Active and every command wakes the child rigid body.
+- Freeze Component disables wake notifications and child physics, breaks the
+  constraint, preserves the current world location, rotation and scale, and
+  attaches the child to the configured parent with Keep World. It is safe to
+  call repeatedly while frozen.
+- Unfreeze Component detaches with Keep World, restores the saved physics, gravity
+  and wake-notification settings, rebuilds the constraint, restores both local
+  constraint reference frames plus the live linear/angular drive targets, and
+  wakes the child. Call it only after Freeze Component.
+- Is Component Frozen reports only this plugin's freeze state, independently of
+  the rigid body's native Chaos sleep/wake state.
+- Blueprint-readable command states are exposed separately for each mode:
+  Linear State (Retracted/Extended), Angular Position State (Closed/Open), and
+  Angular Velocity State (Stopped/Running). Matching pure getter nodes are also
+  available. These are commanded states, not physical target-reached signals.
+- Freeze Component and Unfreeze Component have no return pin, so Blueprint can
+  connect multiple Mechanism Actuator references to one Target pin just like
+  Toggle. Query individual results with Is Component Frozen.
+- While frozen, actuator initialization and wake commands cannot re-enable
+  or wake the child. Use Is Simulating Physics to inspect the actual simulation
+  flag; Is Any Rigid Body Awake can report a kinematic Chaos body as awake.
+- If an actuator is authored below its moving child, initialization reparents the
+  actuator itself to the configured parent with Keep World so its constraint
+  frame does not move with the simulated child.
 - Parent Dominates is optional and does not change the parent's simulation flag.
 - Max Force/Torque of 0 follows Unreal's unlimited convention.
 - If the child does not move, verify the child has collision geometry suitable for physics, is Movable, and the actuator pivot/axes are oriented correctly.

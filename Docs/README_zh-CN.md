@@ -57,7 +57,8 @@ git -C Plugins/MechanismActuator pull origin main
 - Retracted Position Cm 是缩回目标；
 - Extended Position Cm 是伸出目标；
 - Auto Calculate Linear Limit 默认开启；
-- Linear Max Speed：0 表示保持旧版的瞬时目标，正数表示目标最大推进速度，单位 cm/s。
+- Linear Max Speed：0 表示保持旧版的瞬时目标，正数表示目标最大推进速度，单位 cm/s；
+  面板拖动和滚轮步进为 1 cm/s，也就是 0.01 m/s。
 
 例如沿执行器局部 X 正方向运动 2 cm：
 

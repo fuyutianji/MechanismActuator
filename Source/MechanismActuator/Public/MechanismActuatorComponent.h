@@ -181,6 +181,7 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Linear Drive",
         meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition",
         EditConditionHides, ClampMin="0.0", Units="cm/s",
+        Delta="1.0", WheelStep="1.0",
         DisplayName="Linear Max Speed"))
     float LinearMaxSpeedCmPerSecond = 0.0f;
 

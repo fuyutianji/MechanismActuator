@@ -83,7 +83,7 @@ Example: move one finger +2 cm along the actuator's local X axis:
 - Retracted Position Cm: (0, 0, 0)
 - Extended Position Cm: (2, 0, 0)
 - Auto Calculate Linear Limit: true
-- Linear Max Speed: 0 for legacy instant targeting, or a positive speed in cm/s
+- Linear Max Speed: 0 for legacy instant targeting, or a positive speed in cm/s. The editor drag/wheel step is 1 cm/s (0.01 m/s).
 
 Call `Set Actuator Active(true)` or `Extend` to extend. Call `Set Actuator Active(false)` or `Retract` to retract. `Toggle` switches between them.
 

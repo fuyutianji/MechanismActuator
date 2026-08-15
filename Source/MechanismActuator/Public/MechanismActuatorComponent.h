@@ -1,5 +1,5 @@
-// Main APIs: configure actuator constraints, command motion, freeze the moving
-// component in its current pose, and restore physics-driven constraint motion.
+// Main APIs: configure actuator constraints, command motion, report completed
+// linear motion, freeze the moving component, and restore constraint motion.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -58,6 +58,11 @@ enum class EMechanismAngularAxis : uint8
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
     FMechanismActuatorStateChanged, bool, bActive,
     EMechanismActuatorMode, Mode);
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
+    FMechanismActuatorLinearEndEvent,
+    UPrimitiveComponent*, MovingComponent,
+    FName, BoneName);
 
 /**
  * Compact constraint component for cylinders, grippers, doors and turntables.
@@ -301,6 +306,26 @@ public:
     UPROPERTY(BlueprintAssignable, Category="Mechanism|Events")
     FMechanismActuatorStateChanged OnStateChanged;
 
+    /** Fired when an extending child reaches a sleeping/stopped state. */
+    UPROPERTY(BlueprintAssignable, Category="Mechanism|Events",
+        meta=(DisplayName="On Extend To End"))
+    FMechanismActuatorLinearEndEvent OnExtendToEnd;
+
+    /** Fired when a retracting child reaches a sleeping/stopped state. */
+    UPROPERTY(BlueprintAssignable, Category="Mechanism|Events",
+        meta=(DisplayName="On Retract To End"))
+    FMechanismActuatorLinearEndEvent OnRetractToEnd;
+
+    /** Fired when a child wakes after On Extend To End. */
+    UPROPERTY(BlueprintAssignable, Category="Mechanism|Events",
+        meta=(DisplayName="On Leave From Extend End"))
+    FMechanismActuatorLinearEndEvent OnLeaveFromExtendEnd;
+
+    /** Fired when a child wakes after On Retract To End. */
+    UPROPERTY(BlueprintAssignable, Category="Mechanism|Events",
+        meta=(DisplayName="On Leave From Retract End"))
+    FMechanismActuatorLinearEndEvent OnLeaveFromRetractEnd;
+
     UFUNCTION(BlueprintCallable, Category="Mechanism Actuator")
     bool InitializeActuator();
 
@@ -402,6 +427,33 @@ public:
     float GetCalculatedLinearLimitCm() const;
 
 protected:
+    /** BlueprintNativeEvent paired with the matching assignable event. */
+    UFUNCTION(BlueprintNativeEvent, Category="Mechanism|Events",
+        meta=(DisplayName="On Extend To End"))
+    void ReceiveExtendToEnd(UPrimitiveComponent* MovingComponent, FName BoneName);
+    virtual void ReceiveExtendToEnd_Implementation(
+        UPrimitiveComponent* MovingComponent, FName BoneName);
+
+    UFUNCTION(BlueprintNativeEvent, Category="Mechanism|Events",
+        meta=(DisplayName="On Retract To End"))
+    void ReceiveRetractToEnd(UPrimitiveComponent* MovingComponent, FName BoneName);
+    virtual void ReceiveRetractToEnd_Implementation(
+        UPrimitiveComponent* MovingComponent, FName BoneName);
+
+    UFUNCTION(BlueprintNativeEvent, Category="Mechanism|Events",
+        meta=(DisplayName="On Leave From Extend End"))
+    void ReceiveLeaveFromExtendEnd(
+        UPrimitiveComponent* MovingComponent, FName BoneName);
+    virtual void ReceiveLeaveFromExtendEnd_Implementation(
+        UPrimitiveComponent* MovingComponent, FName BoneName);
+
+    UFUNCTION(BlueprintNativeEvent, Category="Mechanism|Events",
+        meta=(DisplayName="On Leave From Retract End"))
+    void ReceiveLeaveFromRetractEnd(
+        UPrimitiveComponent* MovingComponent, FName BoneName);
+    virtual void ReceiveLeaveFromRetractEnd_Implementation(
+        UPrimitiveComponent* MovingComponent, FName BoneName);
+
     virtual void InitializeComponent() override;
     virtual void UninitializeComponent() override;
     virtual void OnRegister() override;
@@ -434,6 +486,18 @@ private:
     void ApplyCurrentState();
     void RequestLinearPositionTarget(const FVector& Target);
     void RefreshLinearSpeedTick();
+    void BindMovingComponentEvents(UPrimitiveComponent* Child);
+    void UnbindMovingComponentEvents();
+    void ArmLinearMotionStoppedEvent();
+
+    UFUNCTION()
+    void HandleMovingComponentSleep(
+        UPrimitiveComponent* SleepingComponent, FName BoneName);
+
+    UFUNCTION()
+    void HandleMovingComponentWake(
+        UPrimitiveComponent* WakingComponent, FName BoneName);
+
     void UpdateExposedStates();
     void WakeChild() const;
     void SetComponentFrozen(bool bFrozen);
@@ -444,6 +508,12 @@ private:
     FVector CurrentLinearPositionTargetCm = FVector::ZeroVector;
     FVector DesiredLinearPositionTargetCm = FVector::ZeroVector;
     bool bLinearSpeedTargetInitialized = false;
+    bool bWaitingForLinearMotionStop = false;
+    bool bLinearEndCommandActive = false;
+    EMechanismLinearState ReachedLinearEnd = EMechanismLinearState::Retracted;
+    bool bHasReachedLinearEnd = false;
+    bool bBoundChildOriginalGenerateWakeEvents = false;
+    TWeakObjectPtr<UPrimitiveComponent> BoundSleepComponent;
 
     bool bSavedChildSimulatePhysics = true;
     bool bSavedChildEnableGravity = false;

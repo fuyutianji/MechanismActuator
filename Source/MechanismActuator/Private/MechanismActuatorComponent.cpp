@@ -1,5 +1,5 @@
-// Implements actuator setup/commands plus reversible freeze and unfreeze
-// restoration for the configured moving component.
+// Implements actuator setup/commands, child motion-stop forwarding, and
+// reversible freeze/unfreeze restoration for the configured moving component.
 #include "MechanismActuatorComponent.h"
 
 #include "Components/PrimitiveComponent.h"
@@ -56,6 +56,10 @@ void UMechanismActuatorComponent::UninitializeComponent()
     // must be allowed to configure the constraint again.
     SetComponentTickEnabled(false);
     bLinearSpeedTargetInitialized = false;
+    bWaitingForLinearMotionStop = false;
+    bLinearEndCommandActive = false;
+    bHasReachedLinearEnd = false;
+    UnbindMovingComponentEvents();
     bActuatorInitialized = false;
     SetComponentFrozen(false);
     bHasSavedConstraintState = false;
@@ -212,6 +216,11 @@ bool UMechanismActuatorComponent::InitializeActuator()
         return true;
     }
 
+    bWaitingForLinearMotionStop = false;
+    bLinearEndCommandActive = false;
+    bHasReachedLinearEnd = false;
+    UnbindMovingComponentEvents();
+
     UPrimitiveComponent* Parent = GetParentComponent();
     UPrimitiveComponent* Child = GetMovingComponent();
 
@@ -237,6 +246,10 @@ bool UMechanismActuatorComponent::InitializeActuator()
     {
         Child->SetMobility(EComponentMobility::Movable);
     }
+    // Bind before applying the configured physics state so newly created Chaos
+    // bodies are created with sleep/wake notifications enabled.
+    BindMovingComponentEvents(Child);
+
     // Apply the configured initial child state once per component lifecycle.
     // The idempotent initialization guard prevents later duplicate calls from
     // overriding gameplay changes to simulation or gravity.
@@ -245,6 +258,7 @@ bool UMechanismActuatorComponent::InitializeActuator()
 
     if (!ConfigureConstraintForBodies(Parent, Child))
     {
+        UnbindMovingComponentEvents();
         return false;
     }
 
@@ -267,6 +281,9 @@ bool UMechanismActuatorComponent::ReinitializeActuator()
         return false;
     }
 
+    bWaitingForLinearMotionStop = false;
+    bLinearEndCommandActive = false;
+    bHasReachedLinearEnd = false;
     bActuatorInitialized = false;
     return InitializeActuator();
 }
@@ -543,6 +560,142 @@ void UMechanismActuatorComponent::WakeChild() const
     }
 }
 
+void UMechanismActuatorComponent::BindMovingComponentEvents(
+    UPrimitiveComponent* Child)
+{
+    if (!IsValid(Child))
+    {
+        UnbindMovingComponentEvents();
+        return;
+    }
+
+    if (BoundSleepComponent.Get() == Child)
+    {
+        Child->OnComponentSleep.AddUniqueDynamic(
+            this, &UMechanismActuatorComponent::HandleMovingComponentSleep);
+        Child->OnComponentWake.AddUniqueDynamic(
+            this, &UMechanismActuatorComponent::HandleMovingComponentWake);
+        Child->BodyInstance.bGenerateWakeEvents = true;
+        return;
+    }
+
+    UnbindMovingComponentEvents();
+    BoundSleepComponent = Child;
+    bBoundChildOriginalGenerateWakeEvents =
+        Child->BodyInstance.bGenerateWakeEvents;
+    Child->OnComponentSleep.AddUniqueDynamic(
+        this, &UMechanismActuatorComponent::HandleMovingComponentSleep);
+    Child->OnComponentWake.AddUniqueDynamic(
+        this, &UMechanismActuatorComponent::HandleMovingComponentWake);
+    Child->BodyInstance.bGenerateWakeEvents = true;
+}
+
+void UMechanismActuatorComponent::UnbindMovingComponentEvents()
+{
+    if (UPrimitiveComponent* Child = BoundSleepComponent.Get(); IsValid(Child))
+    {
+        Child->OnComponentSleep.RemoveDynamic(
+            this, &UMechanismActuatorComponent::HandleMovingComponentSleep);
+        Child->OnComponentWake.RemoveDynamic(
+            this, &UMechanismActuatorComponent::HandleMovingComponentWake);
+        Child->BodyInstance.bGenerateWakeEvents =
+            bBoundChildOriginalGenerateWakeEvents;
+    }
+
+    BoundSleepComponent.Reset();
+    bBoundChildOriginalGenerateWakeEvents = false;
+}
+
+void UMechanismActuatorComponent::ArmLinearMotionStoppedEvent()
+{
+    bWaitingForLinearMotionStop =
+        Mode == EMechanismActuatorMode::LinearPosition
+        && bLinearEndCommandActive
+        && bActuatorInitialized
+        && !bComponentFrozen
+        && IsValid(BoundSleepComponent.Get());
+}
+
+void UMechanismActuatorComponent::HandleMovingComponentSleep(
+    UPrimitiveComponent* SleepingComponent, const FName BoneName)
+{
+    if (!bWaitingForLinearMotionStop
+        || Mode != EMechanismActuatorMode::LinearPosition
+        || SleepingComponent != BoundSleepComponent.Get()
+        || (ChildBoneName != NAME_None
+            && BoneName != NAME_None
+            && BoneName != ChildBoneName))
+    {
+        return;
+    }
+
+    bWaitingForLinearMotionStop = false;
+    ReachedLinearEnd = LinearState;
+    bHasReachedLinearEnd = true;
+
+    if (ReachedLinearEnd == EMechanismLinearState::Extended)
+    {
+        ReceiveExtendToEnd(SleepingComponent, BoneName);
+        OnExtendToEnd.Broadcast(SleepingComponent, BoneName);
+    }
+    else
+    {
+        ReceiveRetractToEnd(SleepingComponent, BoneName);
+        OnRetractToEnd.Broadcast(SleepingComponent, BoneName);
+    }
+}
+
+void UMechanismActuatorComponent::HandleMovingComponentWake(
+    UPrimitiveComponent* WakingComponent, const FName BoneName)
+{
+    if (!bHasReachedLinearEnd
+        || WakingComponent != BoundSleepComponent.Get()
+        || (ChildBoneName != NAME_None
+            && BoneName != NAME_None
+            && BoneName != ChildBoneName))
+    {
+        return;
+    }
+
+    const EMechanismLinearState LeftEnd = ReachedLinearEnd;
+    bHasReachedLinearEnd = false;
+
+    // A released obstruction can let the existing drive continue without a
+    // new command. Re-arm here so the next sleep reports reaching the end again.
+    ArmLinearMotionStoppedEvent();
+
+    if (LeftEnd == EMechanismLinearState::Extended)
+    {
+        ReceiveLeaveFromExtendEnd(WakingComponent, BoneName);
+        OnLeaveFromExtendEnd.Broadcast(WakingComponent, BoneName);
+    }
+    else
+    {
+        ReceiveLeaveFromRetractEnd(WakingComponent, BoneName);
+        OnLeaveFromRetractEnd.Broadcast(WakingComponent, BoneName);
+    }
+}
+
+void UMechanismActuatorComponent::ReceiveExtendToEnd_Implementation(
+    UPrimitiveComponent* MovingComponent, const FName BoneName)
+{
+}
+
+void UMechanismActuatorComponent::ReceiveRetractToEnd_Implementation(
+    UPrimitiveComponent* MovingComponent, const FName BoneName)
+{
+}
+
+void UMechanismActuatorComponent::ReceiveLeaveFromExtendEnd_Implementation(
+    UPrimitiveComponent* MovingComponent, const FName BoneName)
+{
+}
+
+void UMechanismActuatorComponent::ReceiveLeaveFromRetractEnd_Implementation(
+    UPrimitiveComponent* MovingComponent, const FName BoneName)
+{
+}
+
 void UMechanismActuatorComponent::SetComponentFrozen(const bool bFrozen)
 {
     bComponentFrozen = bFrozen;
@@ -675,6 +828,9 @@ void UMechanismActuatorComponent::SetActuatorActive(const bool bActive)
 {
     bActuatorActive = bActive;
     UpdateExposedStates();
+    bLinearEndCommandActive =
+        Mode == EMechanismActuatorMode::LinearPosition;
+    ArmLinearMotionStoppedEvent();
     ApplyCurrentState();
     OnStateChanged.Broadcast(bActuatorActive, Mode);
 }
@@ -707,6 +863,8 @@ void UMechanismActuatorComponent::Close()
 void UMechanismActuatorComponent::SetPositionAlpha(float Alpha)
 {
     Alpha = FMath::Clamp(Alpha, 0.0f, 1.0f);
+    bWaitingForLinearMotionStop = false;
+    bLinearEndCommandActive = false;
 
     if (Mode == EMechanismActuatorMode::LinearPosition)
     {
@@ -803,6 +961,12 @@ bool UMechanismActuatorComponent::FreezeComponentInternal()
             *GetPathName());
         return false;
     }
+
+    // Disabling simulation can generate a sleep callback. A manual freeze is
+    // not completion of the most recent Extend/Retract command.
+    bWaitingForLinearMotionStop = false;
+    bLinearEndCommandActive = false;
+    bHasReachedLinearEnd = false;
 
     if (!Child->IsSimulatingPhysics())
     {

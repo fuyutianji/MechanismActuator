@@ -73,6 +73,19 @@ git -C Plugins/MechanismActuator pull origin main
 - Toggle：切换状态；
 - Set Position Alpha：0 到 1 的连续位置。
 
+每次调用 Extend、Retract 或等价的 Set Actuator Active 后，活动子组件进入物理
+Sleep 时，会根据当前运动方向触发一次 **On Extend To End** 或
+**On Retract To End**。这既包括正常到达伸出/缩回端点，也包括被接触物阻挡后停止。
+
+已经触发 To End 的子组件再次 Wake 时，会触发对应的
+**On Leave From Extend End** 或 **On Leave From Retract End**。如果前方接触物
+松动，原有驱动使气缸继续向前并再次停止，完整顺序为：
+On Extend To End → On Leave From Extend End → On Extend To End。
+切换到反向指令时也会先触发原方向的 Leave From End，再在反向停止后触发新的
+To End。四个事件都会给出活动组件与 Bone Name；组件详情面板可通过“+”直接绑定，
+Mechanism Actuator 蓝图子类也可覆写相应 BlueprintNativeEvent。Freeze Component
+不会触发这些事件。
+
 如果移动方向反了，检查的是 Mechanism Actuator 组件自身的局部坐标轴，而不是世界坐标轴。可以旋转该组件，或把 2 改成 -2。
 
 多轴 Linear Limit 使用 Chaos 的共享球形半径限制。自动值为选中轴上两个目标向量长度的较大值。

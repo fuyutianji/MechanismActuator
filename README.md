@@ -19,6 +19,7 @@ Reusable Unreal Engine C++ physics actuator component for industrial mechanisms.
 - Optional Linear Max Speed rate-limits target travel while retaining high drive strength and force.
 - Common drive, limit, projection and breakable settings are exposed; rarely used native constraint fields are hidden.
 - Blueprint functions include Set Actuator Active, Toggle, Extend, Retract, Open, Close, Set Position Alpha, Rotate Clockwise, Rotate Counter Clockwise, Stop Rotation, Initialize Actuator, Reinitialize Actuator, Freeze Component, Unfreeze Component and Is Component Frozen.
+- On Extend To End and On Retract To End report the direction in which the moving child reaches a sleeping/stopped state. On Leave From Extend End and On Leave From Retract End report when it wakes and leaves that state.
 
 ## Compatibility
 
@@ -136,6 +137,12 @@ One physics constraint can only have one moving child, so one actuator should no
   component instance do nothing. Use Reinitialize Actuator only when an
   intentional constraint rebuild is required.
 - Set Actuator Active and every command wakes the child rigid body.
+- Linear Extend/Retract commands arm the matching To End event. The component
+  enables child sleep/wake events while bound and forwards the moving child and
+  bone name. If an obstruction loosens, the sequence can be On Extend To End,
+  On Leave From Extend End, then On Extend To End again when motion stops. The
+  equivalent Retract events follow the same lifecycle. Freeze Component does
+  not emit any of these events.
 - Freeze Component disables wake notifications and child physics, breaks the
   constraint, preserves the current world location, rotation and scale, and
   attaches the child to the configured parent with Keep World. It is safe to

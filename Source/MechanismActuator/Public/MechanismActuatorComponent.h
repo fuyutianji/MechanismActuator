@@ -173,6 +173,17 @@ public:
         EditConditionHides, ClampMin="0.0"))
     float LinearVelocityStrength = 200.0f;
 
+    /**
+     * Maximum rate at which the linear drive target advances toward a commanded
+     * position. Zero preserves the legacy behavior and applies targets instantly.
+     * High drive strength/force can therefore be combined with a low travel speed.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Linear Drive",
+        meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition",
+        EditConditionHides, ClampMin="0.0", Units="cm/s",
+        DisplayName="Linear Max Speed"))
+    float LinearMaxSpeedCmPerSecond = 0.0f;
+
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Linear Drive",
         meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition",
         EditConditionHides, ClampMin="0.0"))
@@ -328,6 +339,14 @@ public:
     void StopRotation();
 
     /**
+     * Updates the turntable speed in degrees per second. If Angular Velocity mode
+     * is already running, the new target is applied immediately.
+     */
+    UFUNCTION(BlueprintCallable, Category="Mechanism Actuator",
+        meta=(DisplayName="Set Angular Speed Degrees Per Second"))
+    void SetAngularSpeedDegreesPerSecond(float NewSpeedDegreesPerSecond);
+
+    /**
      * Freezes the moving component at its current pose without future wake
      * events. Physics simulation is disabled, the constraint is broken, and
      * the component is attached to the configured parent using Keep World.
@@ -385,6 +404,10 @@ protected:
     virtual void InitializeComponent() override;
     virtual void UninitializeComponent() override;
     virtual void OnRegister() override;
+    virtual void TickComponent(
+        float DeltaTime,
+        ELevelTick TickType,
+        FActorComponentTickFunction* ThisTickFunction) override;
 
 #if WITH_EDITOR
     virtual void PostEditChangeProperty(
@@ -408,12 +431,18 @@ private:
     bool ConfigureConstraintForBodies(
         UPrimitiveComponent* Parent, UPrimitiveComponent* Child);
     void ApplyCurrentState();
+    void RequestLinearPositionTarget(const FVector& Target);
+    void RefreshLinearSpeedTick();
     void UpdateExposedStates();
     void WakeChild() const;
     void SetComponentFrozen(bool bFrozen);
     bool FreezeComponentInternal();
     bool UnfreezeComponentInternal();
     bool UsesLinearAxis(EMechanismLinearAxis Axis) const;
+
+    FVector CurrentLinearPositionTargetCm = FVector::ZeroVector;
+    FVector DesiredLinearPositionTargetCm = FVector::ZeroVector;
+    bool bLinearSpeedTargetInitialized = false;
 
     bool bSavedChildSimulatePhysics = true;
     bool bSavedChildEnableGravity = false;

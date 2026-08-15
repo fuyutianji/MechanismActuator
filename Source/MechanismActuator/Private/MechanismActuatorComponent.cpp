@@ -15,6 +15,8 @@ UMechanismActuatorComponent::UMechanismActuatorComponent(
     : Super(ObjectInitializer)
 {
     bWantsInitializeComponent = true;
+    PrimaryComponentTick.bCanEverTick = true;
+    PrimaryComponentTick.bStartWithTickEnabled = false;
 }
 
 void UMechanismActuatorComponent::InitializeComponent()
@@ -52,10 +54,51 @@ void UMechanismActuatorComponent::UninitializeComponent()
 {
     // A later InitializeComponent call belongs to a new component lifecycle and
     // must be allowed to configure the constraint again.
+    SetComponentTickEnabled(false);
+    bLinearSpeedTargetInitialized = false;
     bActuatorInitialized = false;
     SetComponentFrozen(false);
     bHasSavedConstraintState = false;
     Super::UninitializeComponent();
+}
+
+void UMechanismActuatorComponent::TickComponent(
+    const float DeltaTime,
+    const ELevelTick TickType,
+    FActorComponentTickFunction* ThisTickFunction)
+{
+    Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+    if (Mode != EMechanismActuatorMode::LinearPosition
+        || !bActuatorInitialized
+        || bComponentFrozen
+        || LinearMaxSpeedCmPerSecond <= 0.0f
+        || !bLinearSpeedTargetInitialized)
+    {
+        SetComponentTickEnabled(false);
+        return;
+    }
+
+    const FVector NextTarget = FMath::VInterpConstantTo(
+        CurrentLinearPositionTargetCm,
+        DesiredLinearPositionTargetCm,
+        DeltaTime,
+        LinearMaxSpeedCmPerSecond);
+
+    if (!NextTarget.Equals(CurrentLinearPositionTargetCm, KINDA_SMALL_NUMBER))
+    {
+        CurrentLinearPositionTargetCm = NextTarget;
+        SetLinearPositionTarget(CurrentLinearPositionTargetCm);
+        WakeChild();
+    }
+
+    if (CurrentLinearPositionTargetCm.Equals(
+        DesiredLinearPositionTargetCm, KINDA_SMALL_NUMBER))
+    {
+        CurrentLinearPositionTargetCm = DesiredLinearPositionTargetCm;
+        SetLinearPositionTarget(CurrentLinearPositionTargetCm);
+        SetComponentTickEnabled(false);
+    }
 }
 
 void UMechanismActuatorComponent::OnRegister()
@@ -207,6 +250,7 @@ bool UMechanismActuatorComponent::InitializeActuator()
 
     bActuatorInitialized = true;
     SetComponentFrozen(false);
+    bLinearSpeedTargetInitialized = false;
     bActuatorActive = bStartActive;
     UpdateExposedStates();
     ApplyCurrentState();
@@ -540,13 +584,60 @@ bool UMechanismActuatorComponent::IsComponentFrozen() const
     return bComponentFrozen;
 }
 
+void UMechanismActuatorComponent::RequestLinearPositionTarget(
+    const FVector& Target)
+{
+    DesiredLinearPositionTargetCm = FilterLinearTarget(Target);
+
+    // The first target in a component lifecycle establishes the starting drive
+    // target immediately. Subsequent commands are rate-limited when requested.
+    if (!bLinearSpeedTargetInitialized)
+    {
+        CurrentLinearPositionTargetCm = DesiredLinearPositionTargetCm;
+        bLinearSpeedTargetInitialized = true;
+        SetLinearPositionTarget(CurrentLinearPositionTargetCm);
+        SetComponentTickEnabled(false);
+        return;
+    }
+
+    if (bComponentFrozen)
+    {
+        SetComponentTickEnabled(false);
+        return;
+    }
+
+    if (LinearMaxSpeedCmPerSecond <= 0.0f)
+    {
+        CurrentLinearPositionTargetCm = DesiredLinearPositionTargetCm;
+        SetLinearPositionTarget(CurrentLinearPositionTargetCm);
+        SetComponentTickEnabled(false);
+        return;
+    }
+
+    RefreshLinearSpeedTick();
+}
+
+void UMechanismActuatorComponent::RefreshLinearSpeedTick()
+{
+    const bool bShouldTick =
+        Mode == EMechanismActuatorMode::LinearPosition
+        && bActuatorInitialized
+        && !bComponentFrozen
+        && LinearMaxSpeedCmPerSecond > 0.0f
+        && bLinearSpeedTargetInitialized
+        && !CurrentLinearPositionTargetCm.Equals(
+            DesiredLinearPositionTargetCm, KINDA_SMALL_NUMBER);
+
+    SetComponentTickEnabled(bShouldTick);
+}
+
 void UMechanismActuatorComponent::ApplyCurrentState()
 {
     switch (Mode)
     {
         case EMechanismActuatorMode::LinearPosition:
-            SetLinearPositionTarget(FilterLinearTarget(
-                bActuatorActive ? ExtendedPositionCm : RetractedPositionCm));
+            RequestLinearPositionTarget(
+                bActuatorActive ? ExtendedPositionCm : RetractedPositionCm);
             break;
 
         case EMechanismActuatorMode::AngularPosition:
@@ -619,8 +710,8 @@ void UMechanismActuatorComponent::SetPositionAlpha(float Alpha)
 
     if (Mode == EMechanismActuatorMode::LinearPosition)
     {
-        SetLinearPositionTarget(FilterLinearTarget(
-            FMath::Lerp(RetractedPositionCm, ExtendedPositionCm, Alpha)));
+        RequestLinearPositionTarget(
+            FMath::Lerp(RetractedPositionCm, ExtendedPositionCm, Alpha));
     }
     else if (Mode == EMechanismActuatorMode::AngularPosition)
     {
@@ -680,6 +771,17 @@ void UMechanismActuatorComponent::StopRotation()
     OnStateChanged.Broadcast(false, Mode);
 }
 
+void UMechanismActuatorComponent::SetAngularSpeedDegreesPerSecond(
+    const float NewSpeedDegreesPerSecond)
+{
+    AngularSpeedDegreesPerSecond = FMath::Max(0.0f, NewSpeedDegreesPerSecond);
+
+    if (Mode == EMechanismActuatorMode::AngularVelocity && bActuatorActive)
+    {
+        ApplyCurrentState();
+    }
+}
+
 void UMechanismActuatorComponent::FreezeComponent()
 {
     FreezeComponentInternal();
@@ -732,6 +834,12 @@ bool UMechanismActuatorComponent::FreezeComponentInternal()
             ConstraintInstance.GetAngularOrientationTarget();
         SavedAngularVelocityTarget =
             ConstraintInstance.GetAngularVelocityTarget();
+
+        if (Mode == EMechanismActuatorMode::LinearPosition)
+        {
+            CurrentLinearPositionTargetCm = SavedLinearPositionTarget;
+            bLinearSpeedTargetInitialized = true;
+        }
     }
 
     FTransform SleepWorldTransform = Child->GetComponentTransform();
@@ -751,6 +859,7 @@ bool UMechanismActuatorComponent::FreezeComponentInternal()
     bSavedChildEnableGravity = Child->IsGravityEnabled();
     bSavedGenerateWakeEvents = Child->BodyInstance.bGenerateWakeEvents;
     SetComponentFrozen(true);
+    SetComponentTickEnabled(false);
 
     // Disable notifications before destroying the rigid body. Breaking the
     // constraint afterwards cannot wake a body that no longer simulates.
@@ -882,9 +991,17 @@ bool UMechanismActuatorComponent::UnfreezeComponentInternal()
         SetAngularVelocityTarget(SavedAngularVelocityTarget);
         bHasSavedConstraintState = false;
         WakeChild();
+
+        if (Mode == EMechanismActuatorMode::LinearPosition)
+        {
+            DesiredLinearPositionTargetCm = FilterLinearTarget(
+                bActuatorActive ? ExtendedPositionCm : RetractedPositionCm);
+            RefreshLinearSpeedTick();
+        }
     }
     else
     {
+        bLinearSpeedTargetInitialized = false;
         ApplyCurrentState();
     }
     return true;

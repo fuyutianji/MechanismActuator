@@ -16,6 +16,7 @@ Reusable Unreal Engine C++ physics actuator component for industrial mechanisms.
 - Linear X/Y/Z axes are a multi-select bitmask.
 - Unselected linear axes and every angular axis are locked in Linear mode.
 - Linear limit is calculated automatically from the selected-axis target vectors.
+- Optional Linear Max Speed rate-limits target travel while retaining high drive strength and force.
 - Common drive, limit, projection and breakable settings are exposed; rarely used native constraint fields are hidden.
 - Blueprint functions include Set Actuator Active, Toggle, Extend, Retract, Open, Close, Set Position Alpha, Rotate Clockwise, Rotate Counter Clockwise, Stop Rotation, Initialize Actuator, Reinitialize Actuator, Freeze Component, Unfreeze Component and Is Component Frozen.
 
@@ -82,6 +83,7 @@ Example: move one finger +2 cm along the actuator's local X axis:
 - Retracted Position Cm: (0, 0, 0)
 - Extended Position Cm: (2, 0, 0)
 - Auto Calculate Linear Limit: true
+- Linear Max Speed: 0 for legacy instant targeting, or a positive speed in cm/s
 
 Call `Set Actuator Active(true)` or `Extend` to extend. Call `Set Actuator Active(false)` or `Retract` to retract. `Toggle` switches between them.
 
@@ -90,6 +92,8 @@ For multiple-axis movement, select multiple axes and put the desired values in t
 Important: Chaos uses one radial/spherical linear limit for all Limited axes, not an independent box limit for each axis. Multi-axis targets are supported, but external forces may move the child anywhere inside that shared radius.
 
 Positive and negative direction always follow the **Mechanism Actuator component's local axes**, not necessarily the mesh's local axes or world axes. Rotate the actuator component or use a negative target if the physical direction is reversed.
+
+For slow motion with high force, keep Linear Position Strength and Linear Max Force high, then set Linear Max Speed to the desired travel rate. The component advances the drive target at that rate and only ticks while a limited-speed move is in progress.
 
 ## Angular Position mode
 
@@ -108,6 +112,7 @@ Use this for a continuously rotating turntable or roller.
 
 - Choose the angular axis.
 - Set Angular Speed Degrees Per Second.
+- Use `Set Angular Speed Degrees Per Second` at runtime when the speed must change while already rotating; the new target is applied immediately.
 - Use `Rotate Clockwise`, `Rotate Counter Clockwise`, and `Stop Rotation`.
 - `Set Actuator Active(true)` starts the configured default direction; `Set Actuator Active(false)` stops.
 

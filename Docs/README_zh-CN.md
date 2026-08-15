@@ -56,7 +56,8 @@ git -C Plugins/MechanismActuator pull origin main
 - 三个角度轴全部自动锁定；
 - Retracted Position Cm 是缩回目标；
 - Extended Position Cm 是伸出目标；
-- Auto Calculate Linear Limit 默认开启。
+- Auto Calculate Linear Limit 默认开启；
+- Linear Max Speed：0 表示保持旧版的瞬时目标，正数表示目标最大推进速度，单位 cm/s。
 
 例如沿执行器局部 X 正方向运动 2 cm：
 
@@ -75,6 +76,10 @@ git -C Plugins/MechanismActuator pull origin main
 
 多轴 Linear Limit 使用 Chaos 的共享球形半径限制。自动值为选中轴上两个目标向量长度的较大值。
 
+需要“低速但推力大”时，保持 Linear Position Strength 和 Linear Max Force 较高，
+只把 Linear Max Speed 设置为需要的运行速度。组件只会在限速行程进行期间 Tick，
+到达目标后会自动停止 Tick。
+
 ## 门/转轴模式
 
 设置 Mode = Angular Position。
@@ -92,6 +97,8 @@ git -C Plugins/MechanismActuator pull origin main
 
 - 选择旋转轴；
 - 设置 Angular Speed Degrees Per Second；
+- 如果转盘已经在运行，运行时修改速度请调用 Set Angular Speed Degrees Per Second，
+  新速度会立即重新应用；直接修改属性只会在下一次旋转命令时读取；
 - Rotate Clockwise：顺时针持续旋转；
 - Rotate Counter Clockwise：逆时针持续旋转；
 - Stop Rotation：停止。

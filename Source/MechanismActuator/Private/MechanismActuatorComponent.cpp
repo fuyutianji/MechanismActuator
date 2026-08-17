@@ -50,6 +50,12 @@ void UMechanismActuatorComponent::InitializeComponent()
     }
 }
 
+void UMechanismActuatorComponent::BeginPlay()
+{
+    Super::BeginPlay();
+    PrepareInitialLinearEnd();
+}
+
 void UMechanismActuatorComponent::UninitializeComponent()
 {
     // A later InitializeComponent call belongs to a new component lifecycle and
@@ -58,6 +64,10 @@ void UMechanismActuatorComponent::UninitializeComponent()
     bLinearSpeedTargetInitialized = false;
     bWaitingForLinearMotionStop = false;
     bLinearEndCommandActive = false;
+    bPendingExtendOnBegin = false;
+    bExtendOnBeginHandled = false;
+    bInitialLinearEndPrepared = false;
+    bLinearEndWakeSuppressedUntilCommand = false;
     bHasReachedLinearEnd = false;
     UnbindMovingComponentEvents();
     bActuatorInitialized = false;
@@ -73,13 +83,32 @@ void UMechanismActuatorComponent::TickComponent(
 {
     Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
+    ApplyExtendOnBegin();
+
     if (Mode != EMechanismActuatorMode::LinearPosition
         || !bActuatorInitialized
-        || bComponentFrozen
-        || LinearMaxSpeedCmPerSecond <= 0.0f
-        || !bLinearSpeedTargetInitialized)
+        || bComponentFrozen)
     {
         SetComponentTickEnabled(false);
+        return;
+    }
+
+    // Some Chaos wake transitions do not reach OnComponentWake even though the
+    // body is simulating again. Poll while resting at an end so Leave events
+    // still follow a released obstruction or another source of motion.
+    if (bHasReachedLinearEnd)
+    {
+        if (UPrimitiveComponent* Child = BoundSleepComponent.Get();
+            IsValid(Child) && Child->IsAnyRigidBodyAwake())
+        {
+            HandleMovingComponentWake(Child, ChildBoneName);
+        }
+    }
+
+    if (LinearMaxSpeedCmPerSecond <= 0.0f
+        || !bLinearSpeedTargetInitialized)
+    {
+        RefreshLinearSpeedTick();
         return;
     }
 
@@ -101,7 +130,7 @@ void UMechanismActuatorComponent::TickComponent(
     {
         CurrentLinearPositionTargetCm = DesiredLinearPositionTargetCm;
         SetLinearPositionTarget(CurrentLinearPositionTargetCm);
-        SetComponentTickEnabled(false);
+        RefreshLinearSpeedTick();
     }
 }
 
@@ -265,9 +294,14 @@ bool UMechanismActuatorComponent::InitializeActuator()
     bActuatorInitialized = true;
     SetComponentFrozen(false);
     bLinearSpeedTargetInitialized = false;
-    bActuatorActive = bStartActive;
+    bPendingExtendOnBegin =
+        !bExtendOnBeginHandled
+        && Mode == EMechanismActuatorMode::LinearPosition
+        && bExtendOnBegin;
+    bActuatorActive = bPendingExtendOnBegin ? false : bStartActive;
     UpdateExposedStates();
     ApplyCurrentState();
+    PrepareInitialLinearEnd();
     return true;
 }
 
@@ -616,6 +650,49 @@ void UMechanismActuatorComponent::ArmLinearMotionStoppedEvent()
         && IsValid(BoundSleepComponent.Get());
 }
 
+void UMechanismActuatorComponent::PrepareInitialLinearEnd()
+{
+    if (bInitialLinearEndPrepared
+        || !bActuatorInitialized
+        || Mode != EMechanismActuatorMode::LinearPosition
+        || bComponentFrozen)
+    {
+        return;
+    }
+
+    // Register the initial commanded state before Actor BeginPlay can issue its
+    // first command. Ignore initialization wake callbacks until that command so
+    // the assumed initial end is not cleared before gameplay starts.
+    bInitialLinearEndPrepared = true;
+    bLinearEndWakeSuppressedUntilCommand = true;
+    ReachedLinearEnd = LinearState;
+    bHasReachedLinearEnd = true;
+    bLinearEndCommandActive = true;
+
+    if (bPendingExtendOnBegin)
+    {
+        // The automatic command is delayed until Tick so Blueprint delegate
+        // bindings are ready to receive On Leave From Retract End.
+        SetComponentTickEnabled(true);
+    }
+}
+
+void UMechanismActuatorComponent::ApplyExtendOnBegin()
+{
+    if (!bPendingExtendOnBegin
+        || !bActuatorInitialized
+        || !HasBegunPlay()
+        || Mode != EMechanismActuatorMode::LinearPosition
+        || bComponentFrozen)
+    {
+        return;
+    }
+
+    bPendingExtendOnBegin = false;
+    bExtendOnBeginHandled = true;
+    SetActuatorActive(true);
+}
+
 void UMechanismActuatorComponent::HandleMovingComponentSleep(
     UPrimitiveComponent* SleepingComponent, const FName BoneName)
 {
@@ -630,8 +707,10 @@ void UMechanismActuatorComponent::HandleMovingComponentSleep(
     }
 
     bWaitingForLinearMotionStop = false;
+    bLinearEndWakeSuppressedUntilCommand = false;
     ReachedLinearEnd = LinearState;
     bHasReachedLinearEnd = true;
+    RefreshLinearSpeedTick();
 
     if (ReachedLinearEnd == EMechanismLinearState::Extended)
     {
@@ -649,6 +728,7 @@ void UMechanismActuatorComponent::HandleMovingComponentWake(
     UPrimitiveComponent* WakingComponent, const FName BoneName)
 {
     if (!bHasReachedLinearEnd
+        || bLinearEndWakeSuppressedUntilCommand
         || WakingComponent != BoundSleepComponent.Get()
         || (ChildBoneName != NAME_None
             && BoneName != NAME_None
@@ -772,7 +852,7 @@ void UMechanismActuatorComponent::RequestLinearPositionTarget(
 
 void UMechanismActuatorComponent::RefreshLinearSpeedTick()
 {
-    const bool bShouldTick =
+    const bool bShouldAdvanceTarget =
         Mode == EMechanismActuatorMode::LinearPosition
         && bActuatorInitialized
         && !bComponentFrozen
@@ -781,7 +861,15 @@ void UMechanismActuatorComponent::RefreshLinearSpeedTick()
         && !CurrentLinearPositionTargetCm.Equals(
             DesiredLinearPositionTargetCm, KINDA_SMALL_NUMBER);
 
-    SetComponentTickEnabled(bShouldTick);
+    const bool bShouldMonitorReachedEnd =
+        Mode == EMechanismActuatorMode::LinearPosition
+        && bActuatorInitialized
+        && !bComponentFrozen
+        && !bLinearEndWakeSuppressedUntilCommand
+        && bHasReachedLinearEnd;
+
+    SetComponentTickEnabled(
+        bShouldAdvanceTarget || bShouldMonitorReachedEnd);
 }
 
 void UMechanismActuatorComponent::ApplyCurrentState()
@@ -826,10 +914,46 @@ void UMechanismActuatorComponent::ApplyCurrentState()
 
 void UMechanismActuatorComponent::SetActuatorActive(const bool bActive)
 {
+    if (Mode == EMechanismActuatorMode::LinearPosition
+        && bComponentFrozen
+        && !UnfreezeComponentInternal())
+    {
+        UE_LOG(LogMechanismActuator, Warning,
+            TEXT("%s: Linear motion command was cancelled because the frozen moving component could not be restored."),
+            *GetPathName());
+        return;
+    }
+
+    if (Mode == EMechanismActuatorMode::LinearPosition)
+    {
+        bLinearEndWakeSuppressedUntilCommand = false;
+    }
+
+    if (bPendingExtendOnBegin
+        && Mode == EMechanismActuatorMode::LinearPosition)
+    {
+        // An explicit BeginPlay command replaces the queued automatic command.
+        // PrepareInitialLinearEnd has already registered the initial Retract End.
+        bPendingExtendOnBegin = false;
+        bExtendOnBeginHandled = true;
+    }
+
     bActuatorActive = bActive;
     UpdateExposedStates();
     bLinearEndCommandActive =
         Mode == EMechanismActuatorMode::LinearPosition;
+
+    // A reverse command leaves the previously reported end immediately. Do not
+    // wait for Chaos to emit a wake callback before exposing the state change.
+    if (bLinearEndCommandActive
+        && bHasReachedLinearEnd
+        && ReachedLinearEnd != LinearState
+        && IsValid(BoundSleepComponent.Get()))
+    {
+        HandleMovingComponentWake(
+            BoundSleepComponent.Get(), ChildBoneName);
+    }
+
     ArmLinearMotionStoppedEvent();
     ApplyCurrentState();
     OnStateChanged.Broadcast(bActuatorActive, Mode);
@@ -865,6 +989,14 @@ void UMechanismActuatorComponent::SetPositionAlpha(float Alpha)
     Alpha = FMath::Clamp(Alpha, 0.0f, 1.0f);
     bWaitingForLinearMotionStop = false;
     bLinearEndCommandActive = false;
+
+    if (bLinearEndWakeSuppressedUntilCommand)
+    {
+        // A free-position command replaces a retained endpoint without
+        // reporting a directional Leave event.
+        bLinearEndWakeSuppressedUntilCommand = false;
+        bHasReachedLinearEnd = false;
+    }
 
     if (Mode == EMechanismActuatorMode::LinearPosition)
     {
@@ -962,12 +1094,6 @@ bool UMechanismActuatorComponent::FreezeComponentInternal()
         return false;
     }
 
-    // Disabling simulation can generate a sleep callback. A manual freeze is
-    // not completion of the most recent Extend/Retract command.
-    bWaitingForLinearMotionStop = false;
-    bLinearEndCommandActive = false;
-    bHasReachedLinearEnd = false;
-
     if (!Child->IsSimulatingPhysics())
     {
         UE_LOG(LogMechanismActuator, Warning,
@@ -975,6 +1101,13 @@ bool UMechanismActuatorComponent::FreezeComponentInternal()
             *GetPathName(), *Child->GetName());
         return false;
     }
+
+    // Preserve a reported end across Freeze/Unfreeze, but suppress the sleep
+    // and wake callbacks caused by recreating physics. The next real command
+    // can then emit the correct Leave From End event.
+    bWaitingForLinearMotionStop = false;
+    bLinearEndCommandActive = false;
+    bLinearEndWakeSuppressedUntilCommand = bHasReachedLinearEnd;
 
     EnsureConstraintFrameOnParent(Parent, Child);
 

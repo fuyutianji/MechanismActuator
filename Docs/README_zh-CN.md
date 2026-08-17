@@ -86,6 +86,16 @@ To End。四个事件都会给出活动组件与 Bone Name；组件详情面板�
 Mechanism Actuator 蓝图子类也可覆写相应 BlueprintNativeEvent。Freeze Component
 不会触发这些事件。
 
+所有 Linear Position 执行器都会从 PIE 开始登记初始指令状态：默认 Start Active
+关闭时登记为 Retract End，开启时登记为 Extend End。初始化过程自身产生的 Wake
+不会清除该状态，因此即使 **Extend On Begin** 关闭，第一次调用 Extend 仍会先触发
+On Leave From Retract End；反向情况同理。
+
+开启 Runtime 下的 **Extend On Begin** 后，执行器还会在首个游戏 Tick 自动执行
+Extend，因此启动阶段会依次产生 On Leave From Retract End 和 On Extend To End。
+Actor BeginPlay 如果已经显式调用 Extend，该调用会替代排队中的自动指令，但仍保留
+最初的 Retract End 状态。Linear Position 模式下 Extend On Begin 优先于 Start Active。
+
 如果移动方向反了，检查的是 Mechanism Actuator 组件自身的局部坐标轴，而不是世界坐标轴。可以旋转该组件，或把 2 改成 -2。
 
 多轴 Linear Limit 使用 Chaos 的共享球形半径限制。自动值为选中轴上两个目标向量长度的较大值。
@@ -159,6 +169,16 @@ Sleep/Wake 状态无关。
 Freeze Component 和 Unfreeze Component 没有 Return Value，因此和 Toggle
 一样，可以把多个 Mechanism Actuator 引用同时连接到同一个 Target。需要检查
 单个执行器是否成功冻结时，分别调用 Is Component Frozen。
+
+如果在 On Extend To End 或 On Retract To End 后调用 Freeze Component，对应端点
+状态会跨 Unfreeze Component 保留。恢复物理时产生的内部 Wake 不会触发 Leave；
+随后调用反向指令时，才会触发正确的 On Leave From Extend End 或
+On Leave From Retract End。例如：On Extend To End → Freeze Component →
+Unfreeze Component → Retract → On Leave From Extend End → On Retract To End。
+
+Linear Position 模式调用 Extend、Retract、Toggle 或 Set Actuator Active 时，
+如果 Child 正处于本插件的 Freeze 状态，会先自动执行完整的 Unfreeze Component
+恢复流程，再下达运动指令。恢复失败时本次运动指令会被取消，不会修改目标状态。
 
 蓝图中按三种工作模式分别暴露指令状态：
 

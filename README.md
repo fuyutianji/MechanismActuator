@@ -20,7 +20,7 @@ Reusable Unreal Engine C++ physics actuator component for industrial mechanisms.
 - Common drive, limit, projection and breakable settings are exposed; rarely used native constraint fields are hidden.
 - Blueprint functions include Set Actuator Active, Toggle, Extend, Retract, Open, Close, Set Position Alpha, Rotate Clockwise, Rotate Counter Clockwise, Stop Rotation, Initialize Actuator, Reinitialize Actuator, Freeze Component, Unfreeze Component and Is Component Frozen.
 - On Extend To End and On Retract To End report the direction in which the moving child reaches a sleeping/stopped state. On Leave From Extend End and On Leave From Retract End report when it wakes and leaves that state.
-- Every Linear Position actuator registers its initial PIE command state as Retract End or Extend End. Therefore the first opposite command emits the matching Leave From End event. Extend On Begin additionally starts extending on the first game tick and overrides Start Active for Linear Position mode.
+- Every actuator initializes inactive. Linear Position therefore registers its initial PIE command state as Retract End, so the first Extend command emits On Leave From Retract End before moving toward Extend End.
 
 ## Compatibility
 
@@ -147,11 +147,10 @@ One physics constraint can only have one moving child, so one actuator should no
 - Extend, Retract, Toggle and Set Actuator Active automatically run the existing
   Unfreeze Component restoration first when a Linear Position actuator was
   frozen by this plugin. If restoration fails, the motion command is cancelled.
-- The initial Linear Position state is registered before Actor BeginPlay whether
-  Extend On Begin is enabled or not. Initialization wake callbacks are ignored
-  until the first gameplay command. Extend On Begin defers its automatic Extend
-  until the first game tick; an explicit command issued by Actor BeginPlay
-  replaces that queued command without losing the initial end state.
+- The initial inactive Linear Position state is registered as Retract End before
+  Actor BeginPlay. Initialization wake callbacks are ignored until the first
+  explicit gameplay command, so the first Extend still reports On Leave From
+  Retract End before moving.
 - Freeze Component disables wake notifications and child physics, breaks the
   constraint, preserves the current world location, rotation and scale, and
   attaches the child to the configured parent with Keep World. It is safe to

@@ -265,20 +265,6 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Runtime")
     bool bAutoInitialize = true;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Runtime")
-    bool bStartActive = false;
-
-    /**
-     * Issues Extend on the first game tick. Every Linear Position actuator
-     * registers its initial PIE state as an end even when this is disabled, so
-     * the first opposite command emits the matching Leave From End event. In
-     * Linear Position mode this option takes precedence over Start Active.
-     */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Runtime",
-        meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition",
-        EditConditionHides, DisplayName="Extend On Begin"))
-    bool bExtendOnBegin = false;
-
     UPROPERTY(BlueprintReadOnly, Category="Mechanism|Runtime")
     bool bActuatorActive = false;
 
@@ -466,7 +452,6 @@ protected:
         UPrimitiveComponent* MovingComponent, FName BoneName);
 
     virtual void InitializeComponent() override;
-    virtual void BeginPlay() override;
     virtual void UninitializeComponent() override;
     virtual void OnRegister() override;
     virtual void TickComponent(
@@ -502,7 +487,6 @@ private:
     void UnbindMovingComponentEvents();
     void ArmLinearMotionStoppedEvent();
     void PrepareInitialLinearEnd();
-    void ApplyExtendOnBegin();
 
     UFUNCTION()
     void HandleMovingComponentSleep(
@@ -524,8 +508,6 @@ private:
     bool bLinearSpeedTargetInitialized = false;
     bool bWaitingForLinearMotionStop = false;
     bool bLinearEndCommandActive = false;
-    bool bPendingExtendOnBegin = false;
-    bool bExtendOnBeginHandled = false;
     bool bInitialLinearEndPrepared = false;
     bool bLinearEndWakeSuppressedUntilCommand = false;
     EMechanismLinearState ReachedLinearEnd = EMechanismLinearState::Retracted;

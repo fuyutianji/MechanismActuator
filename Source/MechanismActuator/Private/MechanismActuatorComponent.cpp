@@ -50,12 +50,6 @@ void UMechanismActuatorComponent::InitializeComponent()
     }
 }
 
-void UMechanismActuatorComponent::BeginPlay()
-{
-    Super::BeginPlay();
-    PrepareInitialLinearEnd();
-}
-
 void UMechanismActuatorComponent::UninitializeComponent()
 {
     // A later InitializeComponent call belongs to a new component lifecycle and
@@ -64,8 +58,6 @@ void UMechanismActuatorComponent::UninitializeComponent()
     bLinearSpeedTargetInitialized = false;
     bWaitingForLinearMotionStop = false;
     bLinearEndCommandActive = false;
-    bPendingExtendOnBegin = false;
-    bExtendOnBeginHandled = false;
     bInitialLinearEndPrepared = false;
     bLinearEndWakeSuppressedUntilCommand = false;
     bHasReachedLinearEnd = false;
@@ -82,8 +74,6 @@ void UMechanismActuatorComponent::TickComponent(
     FActorComponentTickFunction* ThisTickFunction)
 {
     Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
-
-    ApplyExtendOnBegin();
 
     if (Mode != EMechanismActuatorMode::LinearPosition
         || !bActuatorInitialized
@@ -294,11 +284,9 @@ bool UMechanismActuatorComponent::InitializeActuator()
     bActuatorInitialized = true;
     SetComponentFrozen(false);
     bLinearSpeedTargetInitialized = false;
-    bPendingExtendOnBegin =
-        !bExtendOnBeginHandled
-        && Mode == EMechanismActuatorMode::LinearPosition
-        && bExtendOnBegin;
-    bActuatorActive = bPendingExtendOnBegin ? false : bStartActive;
+    // Every actuator begins inactive. Gameplay must explicitly issue its first
+    // Extend/Open/Rotate command after initialization.
+    bActuatorActive = false;
     UpdateExposedStates();
     ApplyCurrentState();
     PrepareInitialLinearEnd();
@@ -668,29 +656,6 @@ void UMechanismActuatorComponent::PrepareInitialLinearEnd()
     ReachedLinearEnd = LinearState;
     bHasReachedLinearEnd = true;
     bLinearEndCommandActive = true;
-
-    if (bPendingExtendOnBegin)
-    {
-        // The automatic command is delayed until Tick so Blueprint delegate
-        // bindings are ready to receive On Leave From Retract End.
-        SetComponentTickEnabled(true);
-    }
-}
-
-void UMechanismActuatorComponent::ApplyExtendOnBegin()
-{
-    if (!bPendingExtendOnBegin
-        || !bActuatorInitialized
-        || !HasBegunPlay()
-        || Mode != EMechanismActuatorMode::LinearPosition
-        || bComponentFrozen)
-    {
-        return;
-    }
-
-    bPendingExtendOnBegin = false;
-    bExtendOnBeginHandled = true;
-    SetActuatorActive(true);
 }
 
 void UMechanismActuatorComponent::HandleMovingComponentSleep(
@@ -927,15 +892,6 @@ void UMechanismActuatorComponent::SetActuatorActive(const bool bActive)
     if (Mode == EMechanismActuatorMode::LinearPosition)
     {
         bLinearEndWakeSuppressedUntilCommand = false;
-    }
-
-    if (bPendingExtendOnBegin
-        && Mode == EMechanismActuatorMode::LinearPosition)
-    {
-        // An explicit BeginPlay command replaces the queued automatic command.
-        // PrepareInitialLinearEnd has already registered the initial Retract End.
-        bPendingExtendOnBegin = false;
-        bExtendOnBeginHandled = true;
     }
 
     bActuatorActive = bActive;

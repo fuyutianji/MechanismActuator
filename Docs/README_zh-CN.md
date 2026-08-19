@@ -86,15 +86,10 @@ To End。四个事件都会给出活动组件与 Bone Name；组件详情面板�
 Mechanism Actuator 蓝图子类也可覆写相应 BlueprintNativeEvent。Freeze Component
 不会触发这些事件。
 
-所有 Linear Position 执行器都会从 PIE 开始登记初始指令状态：默认 Start Active
-关闭时登记为 Retract End，开启时登记为 Extend End。初始化过程自身产生的 Wake
-不会清除该状态，因此即使 **Extend On Begin** 关闭，第一次调用 Extend 仍会先触发
-On Leave From Retract End；反向情况同理。
-
-开启 Runtime 下的 **Extend On Begin** 后，执行器还会在首个游戏 Tick 自动执行
-Extend，因此启动阶段会依次产生 On Leave From Retract End 和 On Extend To End。
-Actor BeginPlay 如果已经显式调用 Extend，该调用会替代排队中的自动指令，但仍保留
-最初的 Retract End 状态。Linear Position 模式下 Extend On Begin 优先于 Start Active。
+所有执行器在初始化时都处于未激活状态，不会自动 Extend、Open 或 Rotate。Linear
+Position 执行器会从 PIE 开始把初始状态登记为 Retract End。初始化过程自身产生的
+Wake 不会清除该状态，因此第一次显式调用 Extend 时仍会先触发
+On Leave From Retract End，再向 Extend End 运动。
 
 如果移动方向反了，检查的是 Mechanism Actuator 组件自身的局部坐标轴，而不是世界坐标轴。可以旋转该组件，或把 2 改成 -2。
 

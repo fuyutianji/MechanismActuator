@@ -677,15 +677,26 @@ void UMechanismActuatorComponent::HandleMovingComponentSleep(
     bHasReachedLinearEnd = true;
     RefreshLinearSpeedTick();
 
+    bool bFreezeAtReachedEnd = false;
     if (ReachedLinearEnd == EMechanismLinearState::Extended)
     {
         ReceiveExtendToEnd(SleepingComponent, BoneName);
         OnExtendToEnd.Broadcast(SleepingComponent, BoneName);
+        bFreezeAtReachedEnd = bFreezeOnExtendToEnd;
     }
     else
     {
         ReceiveRetractToEnd(SleepingComponent, BoneName);
         OnRetractToEnd.Broadcast(SleepingComponent, BoneName);
+        bFreezeAtReachedEnd = bFreezeOnRetractToEnd;
+    }
+
+    // Send both forms of the To End event before replacing the rigid body with
+    // the frozen Keep World attachment. FreezeComponentInternal is idempotent
+    // if an event receiver already froze the same moving component.
+    if (bFreezeAtReachedEnd)
+    {
+        FreezeComponentInternal();
     }
 }
 

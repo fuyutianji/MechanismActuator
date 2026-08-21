@@ -86,6 +86,11 @@ To End。四个事件都会给出活动组件与 Bone Name；组件详情面板�
 Mechanism Actuator 蓝图子类也可覆写相应 BlueprintNativeEvent。Freeze Component
 不会触发这些事件。
 
+在 **Mechanism|Runtime** 中可以分别启用 **Freeze On Extend To End** 和
+**Freeze On Retract To End**。对应的 To End 事件发送完成后，执行器会立即调用现有的
+Freeze Component 流程冻结活动刚体；之后执行 Extend、Retract、Toggle 或
+Set Actuator Active 时，仍会先自动恢复该刚体再执行运动。
+
 所有执行器在初始化时都处于未激活状态，不会自动 Extend、Open 或 Rotate。Linear
 Position 执行器会从 PIE 开始把初始状态登记为 Retract End。初始化过程自身产生的
 Wake 不会清除该状态，因此第一次显式调用 Extend 时仍会先触发

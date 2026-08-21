@@ -300,6 +300,16 @@ public:
         DeprecationMessage="Use Is Component Frozen instead."))
     bool bComponentSleepFrozen = false;
 
+    /** Freeze the moving child after the Extend To End events are sent. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Freeze",
+        meta=(DisplayName="Freeze On Extend To End"))
+    bool bFreezeOnExtendToEnd = false;
+
+    /** Freeze the moving child after the Retract To End events are sent. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Freeze",
+        meta=(DisplayName="Freeze On Retract To End"))
+    bool bFreezeOnRetractToEnd = false;
+
     UPROPERTY(BlueprintAssignable, Category="Mechanism|Events")
     FMechanismActuatorStateChanged OnStateChanged;
 

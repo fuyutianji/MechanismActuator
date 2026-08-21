@@ -20,6 +20,7 @@ Reusable Unreal Engine C++ physics actuator component for industrial mechanisms.
 - Common drive, limit, projection and breakable settings are exposed; rarely used native constraint fields are hidden.
 - Blueprint functions include Set Actuator Active, Toggle, Extend, Retract, Open, Close, Set Position Alpha, Rotate Clockwise, Rotate Counter Clockwise, Stop Rotation, Initialize Actuator, Reinitialize Actuator, Freeze Component, Unfreeze Component and Is Component Frozen.
 - On Extend To End and On Retract To End report the direction in which the moving child reaches a sleeping/stopped state. On Leave From Extend End and On Leave From Retract End report when it wakes and leaves that state.
+- Freeze On Extend To End and Freeze On Retract To End optionally freeze the moving child immediately after the matching To End event is sent.
 - Every actuator initializes inactive. Linear Position therefore registers its initial PIE command state as Retract End, so the first Extend command emits On Leave From Retract End before moving toward Extend End.
 
 ## Compatibility

@@ -86,10 +86,11 @@ To End。四个事件都会给出活动组件与 Bone Name；组件详情面板�
 Mechanism Actuator 蓝图子类也可覆写相应 BlueprintNativeEvent。Freeze Component
 不会触发这些事件。
 
-在 **Mechanism|Runtime** 中可以分别启用 **Freeze On Extend To End** 和
-**Freeze On Retract To End**。对应的 To End 事件发送完成后，执行器会立即调用现有的
-Freeze Component 流程冻结活动刚体；之后执行 Extend、Retract、Toggle 或
-Set Actuator Active 时，仍会先自动恢复该刚体再执行运动。
+在 **Mechanism|Freeze** 中可以分别启用 **Freeze On Extend To End** 和
+**Freeze On Retract To End**。这两个选项只在 Linear Position 模式下解锁。
+对应的 To End 事件发送完成后，执行器会立即调用现有的 Freeze Component 流程
+冻结活动刚体；之后执行 Extend、Retract、Toggle 或 Set Actuator Active 时，
+仍会先自动恢复该刚体再执行运动。
 
 所有执行器在初始化时都处于未激活状态，不会自动 Extend、Open 或 Rotate。Linear
 Position 执行器会从 PIE 开始把初始状态登记为 Retract End。初始化过程自身产生的
@@ -124,6 +125,10 @@ On Leave From Retract End，再向 Extend End 运动。
 状态时会触发一次 **On Rotate To Target**。端点角度和 Set Position Alpha 的中间
 目标共用该事件；事件给出活动组件与 Bone Name，并同时支持详情面板绑定和
 BlueprintNativeEvent 覆写。
+
+在同一个 **Mechanism|Freeze** 分组中启用 **Freeze On Rotation Stopped**，
+即可在两种 On Rotate To Target 事件形式都发送完成后自动执行 Freeze Component。
+该选项只在 Angular Position 模式下解锁；Linear 的两个自动冻结选项此时不可编辑。
 
 ## 转盘模式
 

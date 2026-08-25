@@ -738,6 +738,13 @@ void UMechanismActuatorComponent::HandleMovingComponentSleep(
         bWaitingForAngularTargetStop = false;
         ReceiveRotateToTarget(SleepingComponent, BoneName);
         OnRotateToTarget.Broadcast(SleepingComponent, BoneName);
+
+        // Match the Linear To End flow: send both event forms before replacing
+        // the rigid body with the frozen Keep World attachment.
+        if (bFreezeOnRotationStopped)
+        {
+            FreezeComponentInternal();
+        }
         return;
     }
 

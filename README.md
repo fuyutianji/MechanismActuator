@@ -22,7 +22,7 @@ Reusable Unreal Engine C++ physics actuator component for industrial mechanisms.
 - Blueprint functions include Set Actuator Active, Toggle, Extend, Retract, Open, Close, Set Position Alpha, Rotate Clockwise, Rotate Counter Clockwise, Stop Rotation, Initialize Actuator, Reinitialize Actuator, Freeze Component, Unfreeze Component and Is Component Frozen.
 - On Extend To End and On Retract To End report the direction in which the moving child reaches a sleeping/stopped state. On Leave From Extend End and On Leave From Retract End report when it wakes and leaves that state.
 - On Rotate To Target reports when Angular Position motion sleeps/stops after Open, Close, or Set Position Alpha, including intermediate alpha targets.
-- Freeze On Extend To End and Freeze On Retract To End optionally freeze the moving child immediately after the matching To End event is sent.
+- The Mechanism|Freeze group exposes mode-specific automatic freezing: Linear Position enables Freeze On Extend To End and Freeze On Retract To End, while Angular Position enables Freeze On Rotation Stopped.
 - Every actuator initializes inactive. Linear Position therefore registers its initial PIE command state as Retract End, so the first Extend command emits On Leave From Retract End before moving toward Extend End.
 
 ## Compatibility
@@ -115,6 +115,8 @@ The chosen angular axis is Limited automatically; the other two angular axes and
 For slow rotation with high torque, keep Angular Position Strength and Angular Max Torque high, then set Angular Max Speed to the desired rate. The component advances the orientation target at that rate and only ticks while a limited-speed rotation is in progress.
 
 After Open, Close, or Set Position Alpha, **On Rotate To Target** fires once when the moving child enters its sleeping/stopped state. One event name covers both endpoint angles and intermediate alpha targets. It reports the moving component and bone name, and is available as both an assignable event and a BlueprintNativeEvent override.
+
+Enable **Freeze On Rotation Stopped** to run Freeze Component immediately after both forms of On Rotate To Target have been sent. This option shares the Mechanism|Freeze group with the Linear automatic-freeze options; only the options for the selected mode are editable.
 
 ## Angular Velocity mode
 

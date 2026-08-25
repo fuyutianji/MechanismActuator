@@ -1095,6 +1095,19 @@ void UMechanismActuatorComponent::Close()
 
 void UMechanismActuatorComponent::SetPositionAlpha(float Alpha)
 {
+    const bool bUsesPositionTarget =
+        Mode == EMechanismActuatorMode::LinearPosition
+        || Mode == EMechanismActuatorMode::AngularPosition;
+    if (bUsesPositionTarget
+        && bComponentFrozen
+        && !UnfreezeComponentInternal())
+    {
+        UE_LOG(LogMechanismActuator, Warning,
+            TEXT("%s: Set Position Alpha was cancelled because the frozen moving component could not be restored."),
+            *GetPathName());
+        return;
+    }
+
     Alpha = FMath::Clamp(Alpha, 0.0f, 1.0f);
     bWaitingForLinearMotionStop = false;
     bWaitingForAngularTargetStop = false;

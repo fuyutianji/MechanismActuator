@@ -156,7 +156,9 @@ One physics constraint can only have one moving child, so one actuator should no
   not emit any of these events.
 - Extend, Retract, Toggle and Set Actuator Active automatically run the existing
   Unfreeze Component restoration first when a Linear Position actuator was
-  frozen by this plugin. If restoration fails, the motion command is cancelled.
+  frozen by this plugin. Set Position Alpha does the same at the start of the
+  command for both Linear Position and Angular Position. If restoration fails,
+  the motion command is cancelled before its target or exposed state changes.
 - The initial inactive Linear Position state is registered as Retract End before
   Actor BeginPlay. Initialization wake callbacks are ignored until the first
   explicit gameplay command, so the first Extend still reports On Leave From

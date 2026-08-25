@@ -193,7 +193,11 @@ Unfreeze Component → Retract → On Leave From Extend End → On Retract To En
 
 Linear Position 模式调用 Extend、Retract、Toggle 或 Set Actuator Active 时，
 如果 Child 正处于本插件的 Freeze 状态，会先自动执行完整的 Unfreeze Component
-恢复流程，再下达运动指令。恢复失败时本次运动指令会被取消，不会修改目标状态。
+恢复流程，再下达运动指令。
+
+Linear Position 或 Angular Position 模式调用 Set Position Alpha 时，也会在处理
+Alpha、目标和公开状态之前先自动 Unfreeze。恢复失败时本次指令会被取消，不会修改
+目标状态。
 
 蓝图中按三种工作模式分别暴露指令状态：
 

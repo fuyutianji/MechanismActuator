@@ -1,5 +1,5 @@
-// Implements actuator setup/commands, child motion-stop forwarding, and
-// reversible freeze/unfreeze restoration for the configured moving component.
+// Implements actuator setup/commands, rate-limited drive targets, child
+// motion-stop forwarding, and reversible freeze/unfreeze restoration.
 #include "MechanismActuatorComponent.h"
 
 #include "Components/PrimitiveComponent.h"
@@ -56,6 +56,7 @@ void UMechanismActuatorComponent::UninitializeComponent()
     // must be allowed to configure the constraint again.
     SetComponentTickEnabled(false);
     bLinearSpeedTargetInitialized = false;
+    bAngularSpeedTargetInitialized = false;
     bWaitingForLinearMotionStop = false;
     bLinearEndCommandActive = false;
     bInitialLinearEndPrepared = false;
@@ -75,52 +76,97 @@ void UMechanismActuatorComponent::TickComponent(
 {
     Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-    if (Mode != EMechanismActuatorMode::LinearPosition
-        || !bActuatorInitialized
-        || bComponentFrozen)
+    if (!bActuatorInitialized || bComponentFrozen)
     {
         SetComponentTickEnabled(false);
         return;
     }
 
-    // Some Chaos wake transitions do not reach OnComponentWake even though the
-    // body is simulating again. Poll while resting at an end so Leave events
-    // still follow a released obstruction or another source of motion.
-    if (bHasReachedLinearEnd)
+    if (Mode == EMechanismActuatorMode::LinearPosition)
     {
-        if (UPrimitiveComponent* Child = BoundSleepComponent.Get();
-            IsValid(Child) && Child->IsAnyRigidBodyAwake())
+        // Some Chaos wake transitions do not reach OnComponentWake even though
+        // the body is simulating again. Poll while resting at an end so Leave
+        // events still follow a released obstruction or another source of motion.
+        if (bHasReachedLinearEnd)
         {
-            HandleMovingComponentWake(Child, ChildBoneName);
+            if (UPrimitiveComponent* Child = BoundSleepComponent.Get();
+                IsValid(Child) && Child->IsAnyRigidBodyAwake())
+            {
+                HandleMovingComponentWake(Child, ChildBoneName);
+            }
         }
-    }
 
-    if (LinearMaxSpeedCmPerSecond <= 0.0f
-        || !bLinearSpeedTargetInitialized)
-    {
-        RefreshLinearSpeedTick();
+        if (LinearMaxSpeedCmPerSecond <= 0.0f
+            || !bLinearSpeedTargetInitialized)
+        {
+            RefreshLinearSpeedTick();
+            return;
+        }
+
+        const FVector NextTarget = FMath::VInterpConstantTo(
+            CurrentLinearPositionTargetCm,
+            DesiredLinearPositionTargetCm,
+            DeltaTime,
+            LinearMaxSpeedCmPerSecond);
+
+        if (!NextTarget.Equals(
+            CurrentLinearPositionTargetCm, KINDA_SMALL_NUMBER))
+        {
+            CurrentLinearPositionTargetCm = NextTarget;
+            SetLinearPositionTarget(CurrentLinearPositionTargetCm);
+            WakeChild();
+        }
+
+        if (CurrentLinearPositionTargetCm.Equals(
+            DesiredLinearPositionTargetCm, KINDA_SMALL_NUMBER))
+        {
+            CurrentLinearPositionTargetCm = DesiredLinearPositionTargetCm;
+            SetLinearPositionTarget(CurrentLinearPositionTargetCm);
+            RefreshLinearSpeedTick();
+        }
         return;
     }
 
-    const FVector NextTarget = FMath::VInterpConstantTo(
-        CurrentLinearPositionTargetCm,
-        DesiredLinearPositionTargetCm,
-        DeltaTime,
-        LinearMaxSpeedCmPerSecond);
-
-    if (!NextTarget.Equals(CurrentLinearPositionTargetCm, KINDA_SMALL_NUMBER))
+    if (Mode != EMechanismActuatorMode::AngularPosition)
     {
-        CurrentLinearPositionTargetCm = NextTarget;
-        SetLinearPositionTarget(CurrentLinearPositionTargetCm);
+        SetComponentTickEnabled(false);
+        return;
+    }
+
+    if (AngularMaxSpeedDegreesPerSecond <= 0.0f
+        || !bAngularSpeedTargetInitialized)
+    {
+        RefreshAngularSpeedTick();
+        return;
+    }
+
+    const float NextTargetDegrees = FMath::FInterpConstantTo(
+        CurrentAngularPositionTargetDegrees,
+        DesiredAngularPositionTargetDegrees,
+        DeltaTime,
+        AngularMaxSpeedDegreesPerSecond);
+
+    if (!FMath::IsNearlyEqual(
+        NextTargetDegrees,
+        CurrentAngularPositionTargetDegrees,
+        KINDA_SMALL_NUMBER))
+    {
+        CurrentAngularPositionTargetDegrees = NextTargetDegrees;
+        SetAngularOrientationTarget(
+            MakeAngularTarget(CurrentAngularPositionTargetDegrees));
         WakeChild();
     }
 
-    if (CurrentLinearPositionTargetCm.Equals(
-        DesiredLinearPositionTargetCm, KINDA_SMALL_NUMBER))
+    if (FMath::IsNearlyEqual(
+        CurrentAngularPositionTargetDegrees,
+        DesiredAngularPositionTargetDegrees,
+        KINDA_SMALL_NUMBER))
     {
-        CurrentLinearPositionTargetCm = DesiredLinearPositionTargetCm;
-        SetLinearPositionTarget(CurrentLinearPositionTargetCm);
-        RefreshLinearSpeedTick();
+        CurrentAngularPositionTargetDegrees =
+            DesiredAngularPositionTargetDegrees;
+        SetAngularOrientationTarget(
+            MakeAngularTarget(CurrentAngularPositionTargetDegrees));
+        RefreshAngularSpeedTick();
     }
 }
 
@@ -284,6 +330,7 @@ bool UMechanismActuatorComponent::InitializeActuator()
     bActuatorInitialized = true;
     SetComponentFrozen(false);
     bLinearSpeedTargetInitialized = false;
+    bAngularSpeedTargetInitialized = false;
     // Every actuator begins inactive. Gameplay must explicitly issue its first
     // Extend/Open/Rotate command after initialization.
     bActuatorActive = false;
@@ -826,6 +873,59 @@ void UMechanismActuatorComponent::RequestLinearPositionTarget(
     RefreshLinearSpeedTick();
 }
 
+void UMechanismActuatorComponent::RequestAngularPositionTarget(
+    const float TargetDegrees)
+{
+    DesiredAngularPositionTargetDegrees = TargetDegrees;
+
+    // The first target establishes the starting drive angle immediately.
+    // Subsequent commands are rate-limited when a maximum speed is configured.
+    if (!bAngularSpeedTargetInitialized)
+    {
+        CurrentAngularPositionTargetDegrees =
+            DesiredAngularPositionTargetDegrees;
+        bAngularSpeedTargetInitialized = true;
+        SetAngularOrientationTarget(
+            MakeAngularTarget(CurrentAngularPositionTargetDegrees));
+        SetComponentTickEnabled(false);
+        return;
+    }
+
+    if (bComponentFrozen)
+    {
+        SetComponentTickEnabled(false);
+        return;
+    }
+
+    if (AngularMaxSpeedDegreesPerSecond <= 0.0f)
+    {
+        CurrentAngularPositionTargetDegrees =
+            DesiredAngularPositionTargetDegrees;
+        SetAngularOrientationTarget(
+            MakeAngularTarget(CurrentAngularPositionTargetDegrees));
+        SetComponentTickEnabled(false);
+        return;
+    }
+
+    RefreshAngularSpeedTick();
+}
+
+void UMechanismActuatorComponent::RefreshAngularSpeedTick()
+{
+    const bool bShouldAdvanceTarget =
+        Mode == EMechanismActuatorMode::AngularPosition
+        && bActuatorInitialized
+        && !bComponentFrozen
+        && AngularMaxSpeedDegreesPerSecond > 0.0f
+        && bAngularSpeedTargetInitialized
+        && !FMath::IsNearlyEqual(
+            CurrentAngularPositionTargetDegrees,
+            DesiredAngularPositionTargetDegrees,
+            KINDA_SMALL_NUMBER);
+
+    SetComponentTickEnabled(bShouldAdvanceTarget);
+}
+
 void UMechanismActuatorComponent::RefreshLinearSpeedTick()
 {
     const bool bShouldAdvanceTarget =
@@ -858,8 +958,8 @@ void UMechanismActuatorComponent::ApplyCurrentState()
             break;
 
         case EMechanismActuatorMode::AngularPosition:
-            SetAngularOrientationTarget(MakeAngularTarget(
-                bActuatorActive ? OpenAngleDegrees : ClosedAngleDegrees));
+            RequestAngularPositionTarget(
+                bActuatorActive ? OpenAngleDegrees : ClosedAngleDegrees);
             SetAngularVelocityTarget(FVector::ZeroVector);
             break;
 
@@ -972,8 +1072,8 @@ void UMechanismActuatorComponent::SetPositionAlpha(float Alpha)
     }
     else if (Mode == EMechanismActuatorMode::AngularPosition)
     {
-        SetAngularOrientationTarget(MakeAngularTarget(
-            FMath::Lerp(ClosedAngleDegrees, OpenAngleDegrees, Alpha)));
+        RequestAngularPositionTarget(
+            FMath::Lerp(ClosedAngleDegrees, OpenAngleDegrees, Alpha));
     }
 
     bActuatorActive = Alpha >= 0.5f;
@@ -1262,10 +1362,16 @@ bool UMechanismActuatorComponent::UnfreezeComponentInternal()
                 bActuatorActive ? ExtendedPositionCm : RetractedPositionCm);
             RefreshLinearSpeedTick();
         }
+        else if (Mode == EMechanismActuatorMode::AngularPosition)
+        {
+            RequestAngularPositionTarget(
+                bActuatorActive ? OpenAngleDegrees : ClosedAngleDegrees);
+        }
     }
     else
     {
         bLinearSpeedTargetInitialized = false;
+        bAngularSpeedTargetInitialized = false;
         ApplyCurrentState();
     }
     return true;

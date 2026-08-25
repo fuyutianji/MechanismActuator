@@ -111,9 +111,14 @@ On Leave From Retract End，再向 Extend End 运动。
 - 选择 Twist X、Swing 1 Z 或 Swing 2 Y；
 - Closed Angle Degrees 设置关闭角度；
 - Open Angle Degrees 设置打开角度；
+- Angular Max Speed：0 表示保持旧版的瞬时目标，正数表示目标最大推进角速度，单位 deg/s；
 - 其他两个角轴和全部线性轴自动锁定。
 
 调用 Open、Close、Toggle 或 Set Actuator Active(bool)。
+
+需要“低速但扭矩大”时，保持 Angular Position Strength 和 Angular Max Torque 较高，
+只把 Angular Max Speed 设置为需要的角速度。组件只会在限速转动期间 Tick，
+到达目标角度后会自动停止 Tick。
 
 ## 转盘模式
 

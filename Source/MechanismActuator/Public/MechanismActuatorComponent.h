@@ -1,5 +1,5 @@
-// Main APIs: configure actuator constraints, command motion, report completed
-// linear motion, freeze the moving component, and restore constraint motion.
+// Main APIs: configure actuator constraints, command rate-limited linear/angular
+// motion, report completed linear travel, freeze, and restore constraint motion.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -208,6 +208,17 @@ public:
         meta=(EditCondition="Mode != EMechanismActuatorMode::LinearPosition",
         EditConditionHides, ClampMin="0.0"))
     float AngularVelocityStrength = 200.0f;
+
+    /**
+     * Maximum rate at which the Angular Position drive target advances toward
+     * a commanded angle. Zero preserves legacy instantaneous targeting.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Angular Drive",
+        meta=(EditCondition="Mode == EMechanismActuatorMode::AngularPosition",
+        EditConditionHides, ClampMin="0.0", Units="deg/s",
+        Delta="1.0", WheelStep="1.0",
+        DisplayName="Angular Max Speed"))
+    float AngularMaxSpeedDegreesPerSecond = 0.0f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Angular Drive",
         meta=(EditCondition="Mode != EMechanismActuatorMode::LinearPosition",
@@ -492,7 +503,9 @@ private:
         UPrimitiveComponent* Parent, UPrimitiveComponent* Child);
     void ApplyCurrentState();
     void RequestLinearPositionTarget(const FVector& Target);
+    void RequestAngularPositionTarget(float TargetDegrees);
     void RefreshLinearSpeedTick();
+    void RefreshAngularSpeedTick();
     void BindMovingComponentEvents(UPrimitiveComponent* Child);
     void UnbindMovingComponentEvents();
     void ArmLinearMotionStoppedEvent();
@@ -516,6 +529,9 @@ private:
     FVector CurrentLinearPositionTargetCm = FVector::ZeroVector;
     FVector DesiredLinearPositionTargetCm = FVector::ZeroVector;
     bool bLinearSpeedTargetInitialized = false;
+    float CurrentAngularPositionTargetDegrees = 0.0f;
+    float DesiredAngularPositionTargetDegrees = 0.0f;
+    bool bAngularSpeedTargetInitialized = false;
     bool bWaitingForLinearMotionStop = false;
     bool bLinearEndCommandActive = false;
     bool bInitialLinearEndPrepared = false;

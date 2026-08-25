@@ -17,6 +17,7 @@ Reusable Unreal Engine C++ physics actuator component for industrial mechanisms.
 - Unselected linear axes and every angular axis are locked in Linear mode.
 - Linear limit is calculated automatically from the selected-axis target vectors.
 - Optional Linear Max Speed rate-limits target travel while retaining high drive strength and force.
+- Optional Angular Max Speed applies the same target-rate limiting to Angular Position motion.
 - Common drive, limit, projection and breakable settings are exposed; rarely used native constraint fields are hidden.
 - Blueprint functions include Set Actuator Active, Toggle, Extend, Retract, Open, Close, Set Position Alpha, Rotate Clockwise, Rotate Counter Clockwise, Stop Rotation, Initialize Actuator, Reinitialize Actuator, Freeze Component, Unfreeze Component and Is Component Frozen.
 - On Extend To End and On Retract To End report the direction in which the moving child reaches a sleeping/stopped state. On Leave From Extend End and On Leave From Retract End report when it wakes and leaves that state.
@@ -105,9 +106,12 @@ Use this for a door or hinge.
 - Choose Twist X, Swing 1 Z or Swing 2 Y.
 - Closed Angle Degrees: usually 0.
 - Open Angle Degrees: for example 90.
+- Angular Max Speed: 0 for legacy instant targeting, or a positive speed in deg/s.
 - Call `Open`, `Close`, `Toggle`, or `Set Actuator Active(bool)`.
 
 The chosen angular axis is Limited automatically; the other two angular axes and all linear axes are Locked. Angles are limited to less than 180 degrees by the underlying constraint.
+
+For slow rotation with high torque, keep Angular Position Strength and Angular Max Torque high, then set Angular Max Speed to the desired rate. The component advances the orientation target at that rate and only ticks while a limited-speed rotation is in progress.
 
 ## Angular Velocity mode
 

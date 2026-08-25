@@ -58,6 +58,7 @@ void UMechanismActuatorComponent::UninitializeComponent()
     bLinearSpeedTargetInitialized = false;
     bAngularSpeedTargetInitialized = false;
     bWaitingForLinearMotionStop = false;
+    bWaitingForAngularTargetStop = false;
     bLinearEndCommandActive = false;
     bInitialLinearEndPrepared = false;
     bLinearEndWakeSuppressedUntilCommand = false;
@@ -282,6 +283,7 @@ bool UMechanismActuatorComponent::InitializeActuator()
     }
 
     bWaitingForLinearMotionStop = false;
+    bWaitingForAngularTargetStop = false;
     bLinearEndCommandActive = false;
     bHasReachedLinearEnd = false;
     UnbindMovingComponentEvents();
@@ -351,6 +353,7 @@ bool UMechanismActuatorComponent::ReinitializeActuator()
     }
 
     bWaitingForLinearMotionStop = false;
+    bWaitingForAngularTargetStop = false;
     bLinearEndCommandActive = false;
     bHasReachedLinearEnd = false;
     bActuatorInitialized = false;
@@ -685,6 +688,15 @@ void UMechanismActuatorComponent::ArmLinearMotionStoppedEvent()
         && IsValid(BoundSleepComponent.Get());
 }
 
+void UMechanismActuatorComponent::ArmAngularTargetStoppedEvent()
+{
+    bWaitingForAngularTargetStop =
+        Mode == EMechanismActuatorMode::AngularPosition
+        && bActuatorInitialized
+        && !bComponentFrozen
+        && IsValid(BoundSleepComponent.Get());
+}
+
 void UMechanismActuatorComponent::PrepareInitialLinearEnd()
 {
     if (bInitialLinearEndPrepared
@@ -708,12 +720,29 @@ void UMechanismActuatorComponent::PrepareInitialLinearEnd()
 void UMechanismActuatorComponent::HandleMovingComponentSleep(
     UPrimitiveComponent* SleepingComponent, const FName BoneName)
 {
-    if (!bWaitingForLinearMotionStop
-        || Mode != EMechanismActuatorMode::LinearPosition
-        || SleepingComponent != BoundSleepComponent.Get()
+    if (SleepingComponent != BoundSleepComponent.Get()
         || (ChildBoneName != NAME_None
             && BoneName != NAME_None
             && BoneName != ChildBoneName))
+    {
+        return;
+    }
+
+    if (Mode == EMechanismActuatorMode::AngularPosition)
+    {
+        if (!bWaitingForAngularTargetStop)
+        {
+            return;
+        }
+
+        bWaitingForAngularTargetStop = false;
+        ReceiveRotateToTarget(SleepingComponent, BoneName);
+        OnRotateToTarget.Broadcast(SleepingComponent, BoneName);
+        return;
+    }
+
+    if (!bWaitingForLinearMotionStop
+        || Mode != EMechanismActuatorMode::LinearPosition)
     {
         return;
     }
@@ -795,6 +824,11 @@ void UMechanismActuatorComponent::ReceiveLeaveFromExtendEnd_Implementation(
 }
 
 void UMechanismActuatorComponent::ReceiveLeaveFromRetractEnd_Implementation(
+    UPrimitiveComponent* MovingComponent, const FName BoneName)
+{
+}
+
+void UMechanismActuatorComponent::ReceiveRotateToTarget_Implementation(
     UPrimitiveComponent* MovingComponent, const FName BoneName)
 {
 }
@@ -1022,6 +1056,7 @@ void UMechanismActuatorComponent::SetActuatorActive(const bool bActive)
     }
 
     ArmLinearMotionStoppedEvent();
+    ArmAngularTargetStoppedEvent();
     ApplyCurrentState();
     OnStateChanged.Broadcast(bActuatorActive, Mode);
 }
@@ -1055,6 +1090,7 @@ void UMechanismActuatorComponent::SetPositionAlpha(float Alpha)
 {
     Alpha = FMath::Clamp(Alpha, 0.0f, 1.0f);
     bWaitingForLinearMotionStop = false;
+    bWaitingForAngularTargetStop = false;
     bLinearEndCommandActive = false;
 
     if (bLinearEndWakeSuppressedUntilCommand)
@@ -1074,6 +1110,7 @@ void UMechanismActuatorComponent::SetPositionAlpha(float Alpha)
     {
         RequestAngularPositionTarget(
             FMath::Lerp(ClosedAngleDegrees, OpenAngleDegrees, Alpha));
+        ArmAngularTargetStoppedEvent();
     }
 
     bActuatorActive = Alpha >= 0.5f;
@@ -1173,6 +1210,7 @@ bool UMechanismActuatorComponent::FreezeComponentInternal()
     // and wake callbacks caused by recreating physics. The next real command
     // can then emit the correct Leave From End event.
     bWaitingForLinearMotionStop = false;
+    bWaitingForAngularTargetStop = false;
     bLinearEndCommandActive = false;
     bLinearEndWakeSuppressedUntilCommand = bHasReachedLinearEnd;
 

@@ -120,6 +120,11 @@ On Leave From Retract End，再向 Extend End 运动。
 只把 Angular Max Speed 设置为需要的角速度。组件只会在限速转动期间 Tick，
 到达目标角度后会自动停止 Tick。
 
+调用 Open、Close 或 Set Position Alpha 后，活动子组件进入物理 Sleep/Stopped
+状态时会触发一次 **On Rotate To Target**。端点角度和 Set Position Alpha 的中间
+目标共用该事件；事件给出活动组件与 Bone Name，并同时支持详情面板绑定和
+BlueprintNativeEvent 覆写。
+
 ## 转盘模式
 
 设置 Mode = Angular Velocity。

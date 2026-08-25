@@ -1,5 +1,5 @@
 // Main APIs: configure actuator constraints, command rate-limited linear/angular
-// motion, report completed linear travel, freeze, and restore constraint motion.
+// motion, report stopped motion targets, freeze, and restore constraint motion.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -61,6 +61,11 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
     FMechanismActuatorLinearEndEvent,
+    UPrimitiveComponent*, MovingComponent,
+    FName, BoneName);
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
+    FMechanismActuatorAngularTargetEvent,
     UPrimitiveComponent*, MovingComponent,
     FName, BoneName);
 
@@ -344,6 +349,14 @@ public:
         meta=(DisplayName="On Leave From Retract End"))
     FMechanismActuatorLinearEndEvent OnLeaveFromRetractEnd;
 
+    /**
+     * Fired when Angular Position motion sleeps/stops after Open, Close, or
+     * Set Position Alpha, including intermediate alpha targets.
+     */
+    UPROPERTY(BlueprintAssignable, Category="Mechanism|Events",
+        meta=(DisplayName="On Rotate To Target"))
+    FMechanismActuatorAngularTargetEvent OnRotateToTarget;
+
     UFUNCTION(BlueprintCallable, Category="Mechanism Actuator")
     bool InitializeActuator();
 
@@ -472,6 +485,13 @@ protected:
     virtual void ReceiveLeaveFromRetractEnd_Implementation(
         UPrimitiveComponent* MovingComponent, FName BoneName);
 
+    UFUNCTION(BlueprintNativeEvent, Category="Mechanism|Events",
+        meta=(DisplayName="On Rotate To Target"))
+    void ReceiveRotateToTarget(
+        UPrimitiveComponent* MovingComponent, FName BoneName);
+    virtual void ReceiveRotateToTarget_Implementation(
+        UPrimitiveComponent* MovingComponent, FName BoneName);
+
     virtual void InitializeComponent() override;
     virtual void UninitializeComponent() override;
     virtual void OnRegister() override;
@@ -509,6 +529,7 @@ private:
     void BindMovingComponentEvents(UPrimitiveComponent* Child);
     void UnbindMovingComponentEvents();
     void ArmLinearMotionStoppedEvent();
+    void ArmAngularTargetStoppedEvent();
     void PrepareInitialLinearEnd();
 
     UFUNCTION()
@@ -533,6 +554,7 @@ private:
     float DesiredAngularPositionTargetDegrees = 0.0f;
     bool bAngularSpeedTargetInitialized = false;
     bool bWaitingForLinearMotionStop = false;
+    bool bWaitingForAngularTargetStop = false;
     bool bLinearEndCommandActive = false;
     bool bInitialLinearEndPrepared = false;
     bool bLinearEndWakeSuppressedUntilCommand = false;

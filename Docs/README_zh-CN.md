@@ -128,13 +128,20 @@ On Leave From Retract End，再向 Extend End 运动。
 只把 Angular Max Speed 设置为需要的角速度。组件只会在限速转动期间 Tick，
 到达目标角度后会自动停止 Tick。
 
-调用 Open、Close 或 Set Position Alpha 后，活动子组件进入物理 Sleep/Stopped
-状态时会触发一次 **On Rotate To Target**。端点角度和 Set Position Alpha 的中间
-目标共用该事件；事件给出活动组件与 Bone Name，并同时支持详情面板绑定和
-BlueprintNativeEvent 覆写。
+调用 Open、Close、Toggle、Set Actuator Active 或 Set Position Alpha 开始
+Angular Position 命令时，会触发一次 **Start Rotating**。Set Position Alpha 如果
+发现活动端已被冻结，会先自动执行 Unfreeze；只有恢复成功并真正开始新命令后才会
+触发 Start Rotating，恢复失败则取消命令与事件。
 
-在同一个 **Mechanism|Freeze** 分组中启用 **Freeze On Rotation Stopped**，
-即可在两种 On Rotate To Target 事件形式都发送完成后自动执行 Freeze Component。
+活动子组件进入物理 Sleep/Stopped 状态时会触发一次 **On Rotate To End**。
+这里不会检查实际角度是否已经到达目标，因此夹爪夹住物体或被障碍卡住、在目标
+Alpha 之前停止时，同样会触发 On Rotate To End。原有 **On Rotate To Target**
+作为兼容事件保留，并在同一次停止时一起触发。所有事件都会给出活动组件与
+Bone Name，同时支持详情面板绑定和 BlueprintNativeEvent 覆写。
+
+在同一个 **Mechanism|Freeze** 分组中启用 **Freeze On Rotation Stopped** 后，
+执行器会在 On Rotate To End 与兼容事件发送完毕后执行 Freeze Component。
+冻结依据是刚体停止而不是到达目标角度，所以被卡住时也会冻结在当前姿态。
 该选项只在 Angular Position 模式下解锁；Linear 的两个自动冻结选项此时不可编辑。
 
 ## 转盘模式

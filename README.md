@@ -21,7 +21,7 @@ Reusable Unreal Engine C++ physics actuator component for industrial mechanisms.
 - Common drive, limit, projection and breakable settings are exposed; rarely used native constraint fields are hidden.
 - Blueprint functions include Set Actuator Active, Toggle, Extend, Retract, Open, Close, Set Position Alpha, Rotate Clockwise, Rotate Counter Clockwise, Stop Rotation, Initialize Actuator, Reinitialize Actuator, Freeze Component, Unfreeze Component and Is Component Frozen.
 - On Extend To End reports a sleeping/stopped non-zero Linear target, including intermediate Set Position Alpha targets; On Retract To End is reserved for the zero target. The matching Leave events report departure from the previously reached target class.
-- On Rotate To Target reports when Angular Position motion sleeps/stops after Open, Close, or Set Position Alpha, including intermediate alpha targets.
+- Start Rotating reports when an Angular Position command begins. On Rotate To End reports when the child sleeps/stops, including a blocked rotation that never reaches its commanded angle. On Rotate To Target remains available for compatibility and fires at the same stop.
 - The Mechanism|Freeze group exposes mode-specific automatic freezing: Linear Position enables Freeze On Extend To End and Freeze On Retract To End, while Angular Position enables Freeze On Rotation Stopped.
 - Every actuator initializes inactive. Linear Position therefore registers its initial PIE command state as Retract End, so the first Extend command emits On Leave From Retract End before moving toward Extend End.
 
@@ -121,9 +121,11 @@ The chosen angular axis is Limited automatically; the other two angular axes and
 
 For slow rotation with high torque, keep Angular Position Strength and Angular Max Torque high, then set Angular Max Speed to the desired rate. The component advances the orientation target at that rate and only ticks while a limited-speed rotation is in progress.
 
-After Open, Close, or Set Position Alpha, **On Rotate To Target** fires once when the moving child enters its sleeping/stopped state. One event name covers both endpoint angles and intermediate alpha targets. It reports the moving component and bone name, and is available as both an assignable event and a BlueprintNativeEvent override.
+After Open, Close, Toggle, Set Actuator Active, or Set Position Alpha, **Start Rotating** fires when the Angular Position command begins. It is sent only after any automatic unfreeze required by Set Position Alpha has succeeded.
 
-Enable **Freeze On Rotation Stopped** to run Freeze Component immediately after both forms of On Rotate To Target have been sent. This option shares the Mechanism|Freeze group with the Linear automatic-freeze options; only the options for the selected mode are editable.
+When the moving child enters its sleeping/stopped state, **On Rotate To End** fires once. No target-angle check is performed, so a gripper that clamps an object or becomes obstructed still reports On Rotate To End even when it stops before the requested alpha. **On Rotate To Target** remains available for compatibility and fires at the same stop. All events report the moving component and bone name, and are available as both assignable events and BlueprintNativeEvent overrides.
+
+Enable **Freeze On Rotation Stopped** to run Freeze Component after On Rotate To End and the compatibility On Rotate To Target events have been sent. Because the freeze follows the stopped event rather than a target-angle comparison, an obstructed rotation is frozen at the blocked pose. Set Position Alpha automatically runs the existing Unfreeze Component restoration before issuing the next rotation command; if restoration fails, the command and Start Rotating event are cancelled.
 
 ## Angular Velocity mode
 

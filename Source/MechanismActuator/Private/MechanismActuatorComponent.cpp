@@ -1111,30 +1111,47 @@ void UMechanismActuatorComponent::SetPositionAlpha(float Alpha)
     Alpha = FMath::Clamp(Alpha, 0.0f, 1.0f);
     bWaitingForLinearMotionStop = false;
     bWaitingForAngularTargetStop = false;
-    bLinearEndCommandActive = false;
-
-    if (bLinearEndWakeSuppressedUntilCommand)
-    {
-        // A free-position command replaces a retained endpoint without
-        // reporting a directional Leave event.
-        bLinearEndWakeSuppressedUntilCommand = false;
-        bHasReachedLinearEnd = false;
-    }
 
     if (Mode == EMechanismActuatorMode::LinearPosition)
     {
+        bLinearEndCommandActive = true;
+        bLinearEndWakeSuppressedUntilCommand = false;
+
+        // Alpha zero remains the retract end. Every non-zero target is an
+        // extend end, even when the new percentage is below the previous one.
+        bActuatorActive = Alpha > 0.0f;
+        UpdateExposedStates();
+
+        // A new alpha command leaves any previously reported target before it
+        // moves. This keeps all four Linear end/leave events meaningful for
+        // intermediate positions such as 80% -> 40%.
+        if (bHasReachedLinearEnd && IsValid(BoundSleepComponent.Get()))
+        {
+            HandleMovingComponentWake(
+                BoundSleepComponent.Get(), ChildBoneName);
+        }
+
         RequestLinearPositionTarget(
             FMath::Lerp(RetractedPositionCm, ExtendedPositionCm, Alpha));
+        ArmLinearMotionStoppedEvent();
     }
     else if (Mode == EMechanismActuatorMode::AngularPosition)
     {
+        bLinearEndCommandActive = false;
         RequestAngularPositionTarget(
             FMath::Lerp(ClosedAngleDegrees, OpenAngleDegrees, Alpha));
         ArmAngularTargetStoppedEvent();
+
+        bActuatorActive = Alpha >= 0.5f;
+        UpdateExposedStates();
+    }
+    else
+    {
+        bLinearEndCommandActive = false;
+        bActuatorActive = Alpha >= 0.5f;
+        UpdateExposedStates();
     }
 
-    bActuatorActive = Alpha >= 0.5f;
-    UpdateExposedStates();
     WakeChild();
     OnStateChanged.Broadcast(bActuatorActive, Mode);
 }

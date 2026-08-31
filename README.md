@@ -20,7 +20,7 @@ Reusable Unreal Engine C++ physics actuator component for industrial mechanisms.
 - Optional Linear Max Speed rate-limits target travel while retaining high drive strength and force.
 - Optional Angular Max Speed applies the same target-rate limiting to Angular Position motion.
 - Common drive, limit, projection and breakable settings are exposed; rarely used native constraint fields are hidden.
-- Blueprint functions include Set Actuator Active, Toggle, Extend, Retract, Open, Close, Set Position Alpha, Set Linear Position Percent, Rotate Clockwise, Rotate Counter Clockwise, Stop Rotation, Initialize Actuator, Reinitialize Actuator, Freeze Component, Unfreeze Component and Is Component Frozen.
+- Blueprint functions include Set Actuator Active, Toggle, Extend, Retract, Open, Close, Set Position Alpha, Set Linear Position Percent, Set Angular Position Percent, Rotate Clockwise, Rotate Counter Clockwise, Stop Rotation, Initialize Actuator, Reinitialize Actuator, Freeze Component, Unfreeze Component and Is Component Frozen.
 - On Extend To End reports a sleeping/stopped non-zero Linear target, including intermediate Set Position Alpha targets; On Retract To End is reserved for the zero target. The matching Leave events report departure from the previously reached target class.
 - On Rotate To Target reports when Angular Position motion sleeps/stops after Open, Close, or Set Position Alpha, including intermediate alpha targets.
 - The Mechanism|Freeze group exposes mode-specific automatic freezing: Linear Position enables Freeze On Extend To End and Freeze On Retract To End, while Angular Position enables Freeze On Rotation Stopped.
@@ -128,6 +128,12 @@ Use this for a door or hinge.
 The chosen angular axis is Limited automatically; the other two angular axes and all linear axes are Locked. Angles are limited to less than 180 degrees by the underlying constraint.
 
 For slow rotation with high torque, keep Angular Position Strength and Angular Max Torque high, then set Angular Max Speed to the desired rate. The component advances the orientation target at that rate and only ticks while a limited-speed rotation is in progress.
+
+For a PLC value scaled to 0..100, connect it directly to `Set Angular Position
+Percent`: 0 maps to Closed Angle Degrees, 50 maps to the midpoint, and 100 maps
+to Open Angle Degrees. Inputs are clamped to 0..100. The legacy `Set Position
+Alpha` node remains available with its original 0..1 range so existing Blueprints
+continue to work.
 
 After Open, Close, or Set Position Alpha, **On Rotate To Target** fires once when the moving child enters its sleeping/stopped state. One event name covers both endpoint angles and intermediate alpha targets. It reports the moving component and bone name, and is available as both an assignable event and a BlueprintNativeEvent override.
 

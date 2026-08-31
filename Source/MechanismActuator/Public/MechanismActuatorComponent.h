@@ -408,6 +408,14 @@ public:
         meta=(DisplayName="Set Linear Position Percent"))
     void SetLinearPositionPercent(float Percent);
 
+    /**
+     * Commands an Angular Position actuator with a PLC-style percentage.
+     * Values are clamped to 0..100, where 0 is closed and 100 is fully open.
+     */
+    UFUNCTION(BlueprintCallable, Category="Mechanism Actuator",
+        meta=(DisplayName="Set Angular Position Percent"))
+    void SetAngularPositionPercent(float Percent);
+
     UFUNCTION(BlueprintCallable, Category="Mechanism Actuator")
     void RotateClockwise();
 

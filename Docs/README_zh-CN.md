@@ -132,6 +132,11 @@ On Leave From Retract End，再向 Extend End 运动。
 
 调用 Open、Close、Toggle 或 Set Actuator Active(bool)。
 
+PLC 连续位置控制请使用 **Set Angular Position Percent**，直接把 0 到 100 的
+Word/整数值连接到 Percent：0 对应 Closed Angle Degrees，50 对应两者中间角度，
+100 对应 Open Angle Degrees，超出范围会自动限制。旧的 Set Position Alpha
+仍保持 0 到 1，用来兼容已经做好的蓝图；新蓝图不再需要 Map Range Clamped。
+
 需要“低速但扭矩大”时，保持 Angular Position Strength 和 Angular Max Torque 较高，
 只把 Angular Max Speed 设置为需要的角速度。组件只会在限速转动期间 Tick，
 到达目标角度后会自动停止 Tick。

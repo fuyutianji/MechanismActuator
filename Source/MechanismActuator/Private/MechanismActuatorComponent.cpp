@@ -1176,6 +1176,17 @@ void UMechanismActuatorComponent::SetLinearPositionPercent(
     SetPositionAlpha(FMath::Clamp(Percent, 0.0f, 100.0f) / 100.0f);
 }
 
+void UMechanismActuatorComponent::SetAngularPositionPercent(
+    const float Percent)
+{
+    if (Mode != EMechanismActuatorMode::AngularPosition)
+    {
+        return;
+    }
+
+    SetPositionAlpha(FMath::Clamp(Percent, 0.0f, 100.0f) / 100.0f);
+}
+
 void UMechanismActuatorComponent::RotateClockwise()
 {
     if (Mode != EMechanismActuatorMode::AngularVelocity)

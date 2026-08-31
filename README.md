@@ -20,7 +20,7 @@ Reusable Unreal Engine C++ physics actuator component for industrial mechanisms.
 - Optional Angular Max Speed applies the same target-rate limiting to Angular Position motion.
 - Common drive, limit, projection and breakable settings are exposed; rarely used native constraint fields are hidden.
 - Blueprint functions include Set Actuator Active, Toggle, Extend, Retract, Open, Close, Set Position Alpha, Rotate Clockwise, Rotate Counter Clockwise, Stop Rotation, Initialize Actuator, Reinitialize Actuator, Freeze Component, Unfreeze Component and Is Component Frozen.
-- On Extend To End and On Retract To End report the direction in which the moving child reaches a sleeping/stopped state. On Leave From Extend End and On Leave From Retract End report when it wakes and leaves that state.
+- On Extend To End reports a sleeping/stopped non-zero Linear target, including intermediate Set Position Alpha targets; On Retract To End is reserved for the zero target. The matching Leave events report departure from the previously reached target class.
 - On Rotate To Target reports when Angular Position motion sleeps/stops after Open, Close, or Set Position Alpha, including intermediate alpha targets.
 - The Mechanism|Freeze group exposes mode-specific automatic freezing: Linear Position enables Freeze On Extend To End and Freeze On Retract To End, while Angular Position enables Freeze On Rotation Stopped.
 - Every actuator initializes inactive. Linear Position therefore registers its initial PIE command state as Retract End, so the first Extend command emits On Leave From Retract End before moving toward Extend End.
@@ -92,6 +92,13 @@ Example: move one finger +2 cm along the actuator's local X axis:
 
 Call `Set Actuator Active(true)` or `Extend` to extend. Call `Set Actuator Active(false)` or `Retract` to retract. `Toggle` switches between them.
 
+Call `Set Position Alpha` with a normalized value from 0 to 1 to command any
+percentage of the configured stroke. Alpha 0 is the Retract End; every non-zero
+alpha is an Extend End. Consequently, changing 80% to 40% emits On Leave From
+Extend End when the new command starts and On Extend To End when the child
+sleeps/stops at 40%. Moving from a non-zero target to 0 ends with On Retract To
+End. All four Linear end/leave events therefore also apply to alpha commands.
+
 For multiple-axis movement, select multiple axes and put the desired values in the vector. Example X=2 and Z=1 produces a limit radius of sqrt(2^2 + 1^2) = 2.236 cm.
 
 Important: Chaos uses one radial/spherical linear limit for all Limited axes, not an independent box limit for each axis. Multi-axis targets are supported, but external forces may move the child anywhere inside that shared radius.
@@ -148,7 +155,9 @@ One physics constraint can only have one moving child, so one actuator should no
   component instance do nothing. Use Reinitialize Actuator only when an
   intentional constraint rebuild is required.
 - Set Actuator Active and every command wakes the child rigid body.
-- Linear Extend/Retract commands arm the matching To End event. The component
+- Linear Extend/Retract and Set Position Alpha commands arm the matching To End
+  event. Alpha zero is Retract; every non-zero alpha is Extend, independently
+  of whether the new percentage is above or below the previous target. The component
   enables child sleep/wake events while bound and forwards the moving child and
   bone name. If an obstruction loosens, the sequence can be On Extend To End,
   On Leave From Extend End, then On Extend To End again when motion stops. The
@@ -179,7 +188,8 @@ One physics constraint can only have one moving child, so one actuator should no
 - Blueprint-readable command states are exposed separately for each mode:
   Linear State (Retracted/Extended), Angular Position State (Closed/Open), and
   Angular Velocity State (Stopped/Running). Matching pure getter nodes are also
-  available. These are commanded states, not physical target-reached signals.
+  available. For Linear Set Position Alpha, zero is Retracted and every non-zero
+  alpha is Extended. These are commanded states, not physical target-reached signals.
 - Freeze Component and Unfreeze Component have no return pin, so Blueprint can
   connect multiple Mechanism Actuator references to one Target pin just like
   Toggle. Query individual results with Is Component Frozen.

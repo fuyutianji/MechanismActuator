@@ -337,22 +337,22 @@ public:
     UPROPERTY(BlueprintAssignable, Category="Mechanism|Events")
     FMechanismActuatorStateChanged OnStateChanged;
 
-    /** Fired when an extending child reaches a sleeping/stopped state. */
+    /** Fired when a non-zero Linear target reaches a sleeping/stopped state. */
     UPROPERTY(BlueprintAssignable, Category="Mechanism|Events",
         meta=(DisplayName="On Extend To End"))
     FMechanismActuatorLinearEndEvent OnExtendToEnd;
 
-    /** Fired when a retracting child reaches a sleeping/stopped state. */
+    /** Fired when the zero Linear target reaches a sleeping/stopped state. */
     UPROPERTY(BlueprintAssignable, Category="Mechanism|Events",
         meta=(DisplayName="On Retract To End"))
     FMechanismActuatorLinearEndEvent OnRetractToEnd;
 
-    /** Fired when a child wakes after On Extend To End. */
+    /** Fired when a child leaves a previously reported non-zero Linear target. */
     UPROPERTY(BlueprintAssignable, Category="Mechanism|Events",
         meta=(DisplayName="On Leave From Extend End"))
     FMechanismActuatorLinearEndEvent OnLeaveFromExtendEnd;
 
-    /** Fired when a child wakes after On Retract To End. */
+    /** Fired when a child leaves the previously reported zero Linear target. */
     UPROPERTY(BlueprintAssignable, Category="Mechanism|Events",
         meta=(DisplayName="On Leave From Retract End"))
     FMechanismActuatorLinearEndEvent OnLeaveFromRetractEnd;
@@ -391,6 +391,11 @@ public:
     UFUNCTION(BlueprintCallable, Category="Mechanism Actuator")
     void Close();
 
+    /**
+     * Commands a normalized position from 0 (retracted/closed) to 1
+     * (fully extended/open). In Linear mode, every non-zero target uses the
+     * Extend To End event family; exactly zero uses Retract To End.
+     */
     UFUNCTION(BlueprintCallable, Category="Mechanism Actuator")
     void SetPositionAlpha(float Alpha);
 

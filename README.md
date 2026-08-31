@@ -9,17 +9,18 @@ Reusable Unreal Engine C++ physics actuator component for industrial mechanisms.
 - Parent simulation, gravity and mobility are left unchanged.
 - Child simulation, gravity and optional Movable mobility are exposed.
 - Parent/child collision is disabled by default.
-- Three modes:
+- Four modes:
   - **Linear Position**: cylinders, slides and gripper fingers.
   - **Angular Position**: doors, flaps and indexed rotary mechanisms.
   - **Angular Velocity**: continuously rotating turntables and rollers.
+  - **Linear Position (PLC 0-100)**: maps a PLC percentage directly to linear stroke position.
 - Linear X/Y/Z axes are a multi-select bitmask.
 - Unselected linear axes and every angular axis are locked in Linear mode.
 - Linear limit is calculated automatically from the selected-axis target vectors.
 - Optional Linear Max Speed rate-limits target travel while retaining high drive strength and force.
 - Optional Angular Max Speed applies the same target-rate limiting to Angular Position motion.
 - Common drive, limit, projection and breakable settings are exposed; rarely used native constraint fields are hidden.
-- Blueprint functions include Set Actuator Active, Toggle, Extend, Retract, Open, Close, Set Position Alpha, Rotate Clockwise, Rotate Counter Clockwise, Stop Rotation, Initialize Actuator, Reinitialize Actuator, Freeze Component, Unfreeze Component and Is Component Frozen.
+- Blueprint functions include Set Actuator Active, Toggle, Extend, Retract, Open, Close, Set Position Alpha, Set Linear Position Percent, Rotate Clockwise, Rotate Counter Clockwise, Stop Rotation, Initialize Actuator, Reinitialize Actuator, Freeze Component, Unfreeze Component and Is Component Frozen.
 - On Extend To End reports a sleeping/stopped non-zero Linear target, including intermediate Set Position Alpha targets; On Retract To End is reserved for the zero target. The matching Leave events report departure from the previously reached target class.
 - On Rotate To Target reports when Angular Position motion sleeps/stops after Open, Close, or Set Position Alpha, including intermediate alpha targets.
 - The Mechanism|Freeze group exposes mode-specific automatic freezing: Linear Position enables Freeze On Extend To End and Freeze On Retract To End, while Angular Position enables Freeze On Rotation Stopped.
@@ -98,6 +99,13 @@ alpha is an Extend End. Consequently, changing 80% to 40% emits On Leave From
 Extend End when the new command starts and On Extend To End when the child
 sleeps/stops at 40%. Moving from a non-zero target to 0 ends with On Retract To
 End. All four Linear end/leave events therefore also apply to alpha commands.
+
+For a PLC value already scaled to 0..100, select **Linear Position (PLC 0-100)**
+and connect the Word/integer value (converted to float by Blueprint if needed)
+directly to `Set Linear Position Percent`. The input is clamped: 0 maps to
+Retracted Position Cm, 50 maps to the midpoint, and 100 maps to Extended Position
+Cm. This mode uses the same axes, drive strength, speed limit, force, freeze and
+end-event settings as Linear Position.
 
 For multiple-axis movement, select multiple axes and put the desired values in the vector. Example X=2 and Z=1 produces a limit radius of sqrt(2^2 + 1^2) = 2.236 cm.
 

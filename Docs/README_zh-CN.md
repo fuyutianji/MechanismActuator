@@ -49,7 +49,8 @@ git -C Plugins/MechanismActuator pull origin main
 
 ## 直线模式
 
-设置 Mode = Linear Position。
+普通 0 到 1 控制设置 Mode = Linear Position。PLC 已提供 0 到 100 百分比值时，
+设置 Mode = **Linear Position (PLC 0-100)**。两种模式共用下面全部线性参数。
 
 - Linear Axes 可以同时选 X、Y、Z；
 - 未选择的线性轴自动锁定；
@@ -71,7 +72,14 @@ git -C Plugins/MechanismActuator pull origin main
 - Extend 或 Set Actuator Active(true)：伸出；
 - Retract 或 Set Actuator Active(false)：缩回；
 - Toggle：切换状态；
-- Set Position Alpha：0 到 1 的连续位置。
+- Set Position Alpha：0 到 1 的连续位置；
+- Set Linear Position Percent：直接接收 PLC 的 0 到 100 数值。
+
+PLC 的 Word/整数值可以直接接到 **Set Linear Position Percent** 的 Percent 引脚
+（蓝图需要时会自动转换为 Float）。组件会把输入限制到 0 到 100：0 对应
+Retracted Position Cm，50 对应一半行程，100 对应 Extended Position Cm。
+例如行程设置为 0 到 20 cm 时，PLC 给 25，目标位置就是 5 cm。该模式仍然使用
+Linear Max Speed、Position Strength、Max Force、冻结和行程终点事件等原有设置。
 
 Linear 模式下，Set Position Alpha 会完整进入四个行程事件的状态机：Alpha 为 0
 仍表示 Retract End；任意大于 0 的 Alpha 都表示 Extend End，与新目标相对上一个

@@ -328,7 +328,7 @@ public:
         DisplayName="Freeze On Retract To End"))
     bool bFreezeOnRetractToEnd = false;
 
-    /** Freeze the moving child after On Rotate To Target is sent. */
+    /** Freeze the moving child after rotation stopped/end events are sent. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Freeze",
         meta=(EditCondition="Mode == EMechanismActuatorMode::AngularPosition",
         DisplayName="Freeze On Rotation Stopped"))
@@ -357,9 +357,22 @@ public:
         meta=(DisplayName="On Leave From Retract End"))
     FMechanismActuatorLinearEndEvent OnLeaveFromRetractEnd;
 
+    /** Fired when an Angular Position command starts after any required unfreeze. */
+    UPROPERTY(BlueprintAssignable, Category="Mechanism|Events",
+        meta=(DisplayName="Start Rotating"))
+    FMechanismActuatorAngularTargetEvent StartRotating;
+
     /**
-     * Fired when Angular Position motion sleeps/stops after Open, Close, or
-     * Set Position Alpha, including intermediate alpha targets.
+     * Fired when Angular Position motion sleeps/stops, including when an
+     * obstruction stalls the child before the commanded target angle.
+     */
+    UPROPERTY(BlueprintAssignable, Category="Mechanism|Events",
+        meta=(DisplayName="On Rotate To End"))
+    FMechanismActuatorAngularTargetEvent OnRotateToEnd;
+
+    /**
+     * Compatibility event fired together with On Rotate To End after Open,
+     * Close, or Set Position Alpha.
      */
     UPROPERTY(BlueprintAssignable, Category="Mechanism|Events",
         meta=(DisplayName="On Rotate To Target"))
@@ -499,6 +512,20 @@ protected:
         UPrimitiveComponent* MovingComponent, FName BoneName);
 
     UFUNCTION(BlueprintNativeEvent, Category="Mechanism|Events",
+        meta=(DisplayName="Start Rotating"))
+    void ReceiveStartRotating(
+        UPrimitiveComponent* MovingComponent, FName BoneName);
+    virtual void ReceiveStartRotating_Implementation(
+        UPrimitiveComponent* MovingComponent, FName BoneName);
+
+    UFUNCTION(BlueprintNativeEvent, Category="Mechanism|Events",
+        meta=(DisplayName="On Rotate To End"))
+    void ReceiveRotateToEnd(
+        UPrimitiveComponent* MovingComponent, FName BoneName);
+    virtual void ReceiveRotateToEnd_Implementation(
+        UPrimitiveComponent* MovingComponent, FName BoneName);
+
+    UFUNCTION(BlueprintNativeEvent, Category="Mechanism|Events",
         meta=(DisplayName="On Rotate To Target"))
     void ReceiveRotateToTarget(
         UPrimitiveComponent* MovingComponent, FName BoneName);
@@ -543,6 +570,7 @@ private:
     void UnbindMovingComponentEvents();
     void ArmLinearMotionStoppedEvent();
     void ArmAngularTargetStoppedEvent();
+    void BroadcastStartRotating();
     void PrepareInitialLinearEnd();
 
     UFUNCTION()

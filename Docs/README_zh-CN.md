@@ -73,9 +73,16 @@ git -C Plugins/MechanismActuator pull origin main
 - Toggle：切换状态；
 - Set Position Alpha：0 到 1 的连续位置。
 
-每次调用 Extend、Retract 或等价的 Set Actuator Active 后，活动子组件进入物理
-Sleep 时，会根据当前运动方向触发一次 **On Extend To End** 或
-**On Retract To End**。这既包括正常到达伸出/缩回端点，也包括被接触物阻挡后停止。
+Linear 模式下，Set Position Alpha 会完整进入四个行程事件的状态机：Alpha 为 0
+仍表示 Retract End；任意大于 0 的 Alpha 都表示 Extend End，与新目标相对上一个
+目标是增大还是减小无关。例如从 80% 调到 40% 时，命令启动会先触发
+**On Leave From Extend End**，活动端在 40% 处 Sleep/Stopped 后再触发
+**On Extend To End**。从任意非零目标调到 0，则最终触发 **On Retract To End**。
+
+每次调用 Extend、Retract、等价的 Set Actuator Active 或 Linear 模式的
+Set Position Alpha 后，活动子组件进入物理 Sleep 时，会根据目标类型触发一次
+**On Extend To End** 或 **On Retract To End**。Alpha 为 0 属于 Retract，其余
+Alpha 属于 Extend。这既包括正常到达目标，也包括被接触物阻挡后停止。
 
 已经触发 To End 的子组件再次 Wake 时，会触发对应的
 **On Leave From Extend End** 或 **On Leave From Retract End**。如果前方接触物
@@ -206,8 +213,9 @@ Alpha、目标和公开状态之前先自动 Unfreeze。恢复失败时本次指
 - Angular Velocity State：Stopped / Running。
 
 也可以使用 Get Linear State、Get Angular Position State 和
-Get Angular Velocity State 纯节点读取。这些值表示当前下达的目标指令，
-不表示物理组件已经完全到达目标位置。
+Get Angular Velocity State 纯节点读取。Linear 的 Set Position Alpha 命令中，
+Alpha 为 0 时状态为 Retracted，任意大于 0 的 Alpha 状态为 Extended。这些值表示
+当前下达的目标指令，不表示物理组件已经完全到达目标位置。
 
 冻结期间，执行器的自动初始化和普通 Wake 调用都不会重新开启活动组件物理。
 请使用 Is Simulating Physics 检查真实的模拟开关；Chaos 的 Kinematic Body

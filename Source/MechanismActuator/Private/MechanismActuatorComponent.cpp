@@ -1,5 +1,5 @@
-// Implements actuator setup/commands, rate-limited drive targets, child
-// motion-stop forwarding, and reversible freeze/unfreeze restoration.
+// Implements actuator setup/commands, rate-limited drive targets, linear and
+// rotation start/stop forwarding, and reversible freeze/unfreeze restoration.
 #include "MechanismActuatorComponent.h"
 
 #include "Components/PrimitiveComponent.h"
@@ -697,6 +697,21 @@ void UMechanismActuatorComponent::ArmAngularTargetStoppedEvent()
         && IsValid(BoundSleepComponent.Get());
 }
 
+void UMechanismActuatorComponent::BroadcastStartRotating()
+{
+    UPrimitiveComponent* MovingComponent = BoundSleepComponent.Get();
+    if (Mode != EMechanismActuatorMode::AngularPosition
+        || !bActuatorInitialized
+        || bComponentFrozen
+        || !IsValid(MovingComponent))
+    {
+        return;
+    }
+
+    ReceiveStartRotating(MovingComponent, ChildBoneName);
+    StartRotating.Broadcast(MovingComponent, ChildBoneName);
+}
+
 void UMechanismActuatorComponent::PrepareInitialLinearEnd()
 {
     if (bInitialLinearEndPrepared
@@ -736,11 +751,19 @@ void UMechanismActuatorComponent::HandleMovingComponentSleep(
         }
 
         bWaitingForAngularTargetStop = false;
+
+        // Intentionally do not compare the physical angle with the command.
+        // A blocked gripper can sleep before reaching its target and must still
+        // report the stop/end event and follow the configured freeze behavior.
+        ReceiveRotateToEnd(SleepingComponent, BoneName);
+        OnRotateToEnd.Broadcast(SleepingComponent, BoneName);
+
+        // Keep the existing event for Blueprint compatibility.
         ReceiveRotateToTarget(SleepingComponent, BoneName);
         OnRotateToTarget.Broadcast(SleepingComponent, BoneName);
 
-        // Match the Linear To End flow: send both event forms before replacing
-        // the rigid body with the frozen Keep World attachment.
+        // Send every event form before replacing the rigid body with the frozen
+        // Keep World attachment.
         if (bFreezeOnRotationStopped)
         {
             FreezeComponentInternal();
@@ -831,6 +854,16 @@ void UMechanismActuatorComponent::ReceiveLeaveFromExtendEnd_Implementation(
 }
 
 void UMechanismActuatorComponent::ReceiveLeaveFromRetractEnd_Implementation(
+    UPrimitiveComponent* MovingComponent, const FName BoneName)
+{
+}
+
+void UMechanismActuatorComponent::ReceiveStartRotating_Implementation(
+    UPrimitiveComponent* MovingComponent, const FName BoneName)
+{
+}
+
+void UMechanismActuatorComponent::ReceiveRotateToEnd_Implementation(
     UPrimitiveComponent* MovingComponent, const FName BoneName)
 {
 }
@@ -1065,6 +1098,12 @@ void UMechanismActuatorComponent::SetActuatorActive(const bool bActive)
     ArmLinearMotionStoppedEvent();
     ArmAngularTargetStoppedEvent();
     ApplyCurrentState();
+
+    if (Mode == EMechanismActuatorMode::AngularPosition)
+    {
+        BroadcastStartRotating();
+    }
+
     OnStateChanged.Broadcast(bActuatorActive, Mode);
 }
 
@@ -1153,6 +1192,12 @@ void UMechanismActuatorComponent::SetPositionAlpha(float Alpha)
     }
 
     WakeChild();
+
+    if (Mode == EMechanismActuatorMode::AngularPosition)
+    {
+        BroadcastStartRotating();
+    }
+
     OnStateChanged.Broadcast(bActuatorActive, Mode);
 }
 

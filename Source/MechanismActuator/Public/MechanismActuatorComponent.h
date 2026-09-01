@@ -329,7 +329,7 @@ public:
         DisplayName="Freeze On Retract To End"))
     bool bFreezeOnRetractToEnd = false;
 
-    /** Freeze the moving child after On Rotate To Target is sent. */
+    /** Freeze after On Rotate To End and the compatibility On Rotate To Target event are sent. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Freeze",
         meta=(EditCondition="Mode == EMechanismActuatorMode::AngularPosition",
         DisplayName="Freeze On Rotation Stopped"))
@@ -365,6 +365,16 @@ public:
     UPROPERTY(BlueprintAssignable, Category="Mechanism|Events",
         meta=(DisplayName="On Rotate To Target"))
     FMechanismActuatorAngularTargetEvent OnRotateToTarget;
+
+    /** Fired when an Angular Position command starts moving toward a target. */
+    UPROPERTY(BlueprintAssignable, Category="Mechanism|Events",
+        meta=(DisplayName="Start Rotating"))
+    FMechanismActuatorAngularTargetEvent StartRotating;
+
+    /** Fired when Angular Position motion sleeps/stops, including when physically blocked before its target. */
+    UPROPERTY(BlueprintAssignable, Category="Mechanism|Events",
+        meta=(DisplayName="On Rotate To End"))
+    FMechanismActuatorAngularTargetEvent OnRotateToEnd;
 
     UFUNCTION(BlueprintCallable, Category="Mechanism Actuator")
     bool InitializeActuator();
@@ -522,6 +532,20 @@ protected:
     virtual void ReceiveRotateToTarget_Implementation(
         UPrimitiveComponent* MovingComponent, FName BoneName);
 
+    UFUNCTION(BlueprintNativeEvent, Category="Mechanism|Events",
+        meta=(DisplayName="Start Rotating"))
+    void ReceiveStartRotating(
+        UPrimitiveComponent* MovingComponent, FName BoneName);
+    virtual void ReceiveStartRotating_Implementation(
+        UPrimitiveComponent* MovingComponent, FName BoneName);
+
+    UFUNCTION(BlueprintNativeEvent, Category="Mechanism|Events",
+        meta=(DisplayName="On Rotate To End"))
+    void ReceiveRotateToEnd(
+        UPrimitiveComponent* MovingComponent, FName BoneName);
+    virtual void ReceiveRotateToEnd_Implementation(
+        UPrimitiveComponent* MovingComponent, FName BoneName);
+
     virtual void InitializeComponent() override;
     virtual void UninitializeComponent() override;
     virtual void OnRegister() override;
@@ -560,6 +584,7 @@ private:
     void UnbindMovingComponentEvents();
     void ArmLinearMotionStoppedEvent();
     void ArmAngularTargetStoppedEvent();
+    void BroadcastStartRotating();
     void PrepareInitialLinearEnd();
 
     UFUNCTION()

@@ -744,6 +744,8 @@ void UMechanismActuatorComponent::HandleMovingComponentSleep(
         }
 
         bWaitingForAngularTargetStop = false;
+        ReceiveRotateToEnd(SleepingComponent, BoneName);
+        OnRotateToEnd.Broadcast(SleepingComponent, BoneName);
         ReceiveRotateToTarget(SleepingComponent, BoneName);
         OnRotateToTarget.Broadcast(SleepingComponent, BoneName);
 
@@ -844,6 +846,16 @@ void UMechanismActuatorComponent::ReceiveLeaveFromRetractEnd_Implementation(
 }
 
 void UMechanismActuatorComponent::ReceiveRotateToTarget_Implementation(
+    UPrimitiveComponent* MovingComponent, const FName BoneName)
+{
+}
+
+void UMechanismActuatorComponent::ReceiveStartRotating_Implementation(
+    UPrimitiveComponent* MovingComponent, const FName BoneName)
+{
+}
+
+void UMechanismActuatorComponent::ReceiveRotateToEnd_Implementation(
     UPrimitiveComponent* MovingComponent, const FName BoneName)
 {
 }
@@ -1040,12 +1052,15 @@ void UMechanismActuatorComponent::ApplyCurrentState()
 
 void UMechanismActuatorComponent::SetActuatorActive(const bool bActive)
 {
-    if (IsLinearPositionMode()
+    const bool bUsesPositionTarget =
+        IsLinearPositionMode()
+        || Mode == EMechanismActuatorMode::AngularPosition;
+    if (bUsesPositionTarget
         && bComponentFrozen
         && !UnfreezeComponentInternal())
     {
         UE_LOG(LogMechanismActuator, Warning,
-            TEXT("%s: Linear motion command was cancelled because the frozen moving component could not be restored."),
+            TEXT("%s: Position command was cancelled because the frozen moving component could not be restored."),
             *GetPathName());
         return;
     }
@@ -1073,6 +1088,7 @@ void UMechanismActuatorComponent::SetActuatorActive(const bool bActive)
 
     ArmLinearMotionStoppedEvent();
     ArmAngularTargetStoppedEvent();
+    BroadcastStartRotating();
     ApplyCurrentState();
     OnStateChanged.Broadcast(bActuatorActive, Mode);
 }
@@ -1153,6 +1169,7 @@ void UMechanismActuatorComponent::SetPositionAlpha(float Alpha)
 
         bActuatorActive = Alpha >= 0.5f;
         UpdateExposedStates();
+        BroadcastStartRotating();
     }
     else
     {
@@ -1163,6 +1180,29 @@ void UMechanismActuatorComponent::SetPositionAlpha(float Alpha)
 
     WakeChild();
     OnStateChanged.Broadcast(bActuatorActive, Mode);
+}
+
+void UMechanismActuatorComponent::BroadcastStartRotating()
+{
+    if (Mode != EMechanismActuatorMode::AngularPosition
+        || !bActuatorInitialized
+        || bComponentFrozen)
+    {
+        return;
+    }
+
+    UPrimitiveComponent* MovingComponent = BoundSleepComponent.Get();
+    if (!IsValid(MovingComponent))
+    {
+        MovingComponent = GetMovingComponent();
+    }
+    if (!IsValid(MovingComponent))
+    {
+        return;
+    }
+
+    ReceiveStartRotating(MovingComponent, ChildBoneName);
+    StartRotating.Broadcast(MovingComponent, ChildBoneName);
 }
 
 void UMechanismActuatorComponent::SetLinearPositionPercent(

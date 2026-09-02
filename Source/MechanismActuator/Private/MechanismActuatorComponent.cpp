@@ -83,7 +83,7 @@ void UMechanismActuatorComponent::TickComponent(
         return;
     }
 
-    if (IsLinearPositionMode())
+    if (Mode == EMechanismActuatorMode::LinearPosition)
     {
         // Some Chaos wake transitions do not reach OnComponentWake even though
         // the body is simulating again. Poll while resting at an end so Leave
@@ -217,7 +217,6 @@ void UMechanismActuatorComponent::SyncEditorConstraintPreview()
     switch (Mode)
     {
         case EMechanismActuatorMode::LinearPosition:
-        case EMechanismActuatorMode::LinearPositionPercent:
             ConfigureLinearPosition();
             break;
         case EMechanismActuatorMode::AngularPosition:
@@ -411,7 +410,6 @@ bool UMechanismActuatorComponent::ConfigureConstraintForBodies(
     switch (Mode)
     {
         case EMechanismActuatorMode::LinearPosition:
-        case EMechanismActuatorMode::LinearPositionPercent:
             ConfigureLinearPosition();
             break;
         case EMechanismActuatorMode::AngularPosition:
@@ -453,12 +451,6 @@ void UMechanismActuatorComponent::ConfigureCommonConstraint()
         bSoftLimit, SoftLimitStiffness, SoftLimitDamping, 0.0f, 0.0f);
     ConstraintInstance.SetSoftTwistLimitParams(
         bSoftLimit, SoftLimitStiffness, SoftLimitDamping, 0.0f, 0.0f);
-}
-
-bool UMechanismActuatorComponent::IsLinearPositionMode() const
-{
-    return Mode == EMechanismActuatorMode::LinearPosition
-        || Mode == EMechanismActuatorMode::LinearPositionPercent;
 }
 
 bool UMechanismActuatorComponent::UsesLinearAxis(
@@ -689,7 +681,7 @@ void UMechanismActuatorComponent::UnbindMovingComponentEvents()
 void UMechanismActuatorComponent::ArmLinearMotionStoppedEvent()
 {
     bWaitingForLinearMotionStop =
-        IsLinearPositionMode()
+        Mode == EMechanismActuatorMode::LinearPosition
         && bLinearEndCommandActive
         && bActuatorInitialized
         && !bComponentFrozen
@@ -709,7 +701,7 @@ void UMechanismActuatorComponent::PrepareInitialLinearEnd()
 {
     if (bInitialLinearEndPrepared
         || !bActuatorInitialized
-        || !IsLinearPositionMode()
+        || Mode != EMechanismActuatorMode::LinearPosition
         || bComponentFrozen)
     {
         return;
@@ -759,7 +751,7 @@ void UMechanismActuatorComponent::HandleMovingComponentSleep(
     }
 
     if (!bWaitingForLinearMotionStop
-        || !IsLinearPositionMode())
+        || Mode != EMechanismActuatorMode::LinearPosition)
     {
         return;
     }
@@ -990,7 +982,7 @@ void UMechanismActuatorComponent::RefreshAngularSpeedTick()
 void UMechanismActuatorComponent::RefreshLinearSpeedTick()
 {
     const bool bShouldAdvanceTarget =
-        IsLinearPositionMode()
+        Mode == EMechanismActuatorMode::LinearPosition
         && bActuatorInitialized
         && !bComponentFrozen
         && LinearMaxSpeedCmPerSecond > 0.0f
@@ -999,7 +991,7 @@ void UMechanismActuatorComponent::RefreshLinearSpeedTick()
             DesiredLinearPositionTargetCm, KINDA_SMALL_NUMBER);
 
     const bool bShouldMonitorReachedEnd =
-        IsLinearPositionMode()
+        Mode == EMechanismActuatorMode::LinearPosition
         && bActuatorInitialized
         && !bComponentFrozen
         && !bLinearEndWakeSuppressedUntilCommand
@@ -1014,7 +1006,6 @@ void UMechanismActuatorComponent::ApplyCurrentState()
     switch (Mode)
     {
         case EMechanismActuatorMode::LinearPosition:
-        case EMechanismActuatorMode::LinearPositionPercent:
             RequestLinearPositionTarget(
                 bActuatorActive ? ExtendedPositionCm : RetractedPositionCm);
             break;
@@ -1053,7 +1044,7 @@ void UMechanismActuatorComponent::ApplyCurrentState()
 void UMechanismActuatorComponent::SetActuatorActive(const bool bActive)
 {
     const bool bUsesPositionTarget =
-        IsLinearPositionMode()
+        Mode == EMechanismActuatorMode::LinearPosition
         || Mode == EMechanismActuatorMode::AngularPosition;
     if (bUsesPositionTarget
         && bComponentFrozen
@@ -1065,7 +1056,7 @@ void UMechanismActuatorComponent::SetActuatorActive(const bool bActive)
         return;
     }
 
-    if (IsLinearPositionMode())
+    if (Mode == EMechanismActuatorMode::LinearPosition)
     {
         bLinearEndWakeSuppressedUntilCommand = false;
     }
@@ -1073,7 +1064,7 @@ void UMechanismActuatorComponent::SetActuatorActive(const bool bActive)
     bActuatorActive = bActive;
     UpdateExposedStates();
     bLinearEndCommandActive =
-        IsLinearPositionMode();
+        Mode == EMechanismActuatorMode::LinearPosition;
 
     // A reverse command leaves the previously reported end immediately. Do not
     // wait for Chaos to emit a wake callback before exposing the state change.
@@ -1121,7 +1112,7 @@ void UMechanismActuatorComponent::Close()
 void UMechanismActuatorComponent::SetPositionAlpha(float Alpha)
 {
     const bool bUsesPositionTarget =
-        IsLinearPositionMode()
+        Mode == EMechanismActuatorMode::LinearPosition
         || Mode == EMechanismActuatorMode::AngularPosition;
     if (bUsesPositionTarget
         && bComponentFrozen
@@ -1137,7 +1128,7 @@ void UMechanismActuatorComponent::SetPositionAlpha(float Alpha)
     bWaitingForLinearMotionStop = false;
     bWaitingForAngularTargetStop = false;
 
-    if (IsLinearPositionMode())
+    if (Mode == EMechanismActuatorMode::LinearPosition)
     {
         bLinearEndCommandActive = true;
         bLinearEndWakeSuppressedUntilCommand = false;
@@ -1203,17 +1194,6 @@ void UMechanismActuatorComponent::BroadcastStartRotating()
 
     ReceiveStartRotating(MovingComponent, ChildBoneName);
     StartRotating.Broadcast(MovingComponent, ChildBoneName);
-}
-
-void UMechanismActuatorComponent::SetLinearPositionPercent(
-    const float Percent)
-{
-    if (!IsLinearPositionMode())
-    {
-        return;
-    }
-
-    SetPositionAlpha(FMath::Clamp(Percent, 0.0f, 100.0f) / 100.0f);
 }
 
 void UMechanismActuatorComponent::SetAngularPositionPercent(
@@ -1345,7 +1325,7 @@ bool UMechanismActuatorComponent::FreezeComponentInternal()
         SavedAngularVelocityTarget =
             ConstraintInstance.GetAngularVelocityTarget();
 
-        if (IsLinearPositionMode())
+        if (Mode == EMechanismActuatorMode::LinearPosition)
         {
             CurrentLinearPositionTargetCm = SavedLinearPositionTarget;
             bLinearSpeedTargetInitialized = true;
@@ -1502,7 +1482,7 @@ bool UMechanismActuatorComponent::UnfreezeComponentInternal()
         bHasSavedConstraintState = false;
         WakeChild();
 
-        if (IsLinearPositionMode())
+        if (Mode == EMechanismActuatorMode::LinearPosition)
         {
             DesiredLinearPositionTargetCm = FilterLinearTarget(
                 bActuatorActive ? ExtendedPositionCm : RetractedPositionCm);

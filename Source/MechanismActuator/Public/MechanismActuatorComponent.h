@@ -13,8 +13,7 @@ enum class EMechanismActuatorMode : uint8
 {
     LinearPosition UMETA(DisplayName="Linear Position"),
     AngularPosition UMETA(DisplayName="Angular Position (Door/Hinge)"),
-    AngularVelocity UMETA(DisplayName="Angular Velocity (Turntable)"),
-    LinearPositionPercent UMETA(DisplayName="Linear Position (PLC 0-100)")
+    AngularVelocity UMETA(DisplayName="Angular Velocity (Turntable)")
 };
 
 UENUM(BlueprintType)
@@ -120,26 +119,26 @@ public:
     // Selected axes are Limited and driven; unselected axes are Locked.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Linear",
         meta=(Bitmask, BitmaskEnum="/Script/MechanismActuator.EMechanismLinearAxis",
-        EditCondition="Mode == EMechanismActuatorMode::LinearPosition || Mode == EMechanismActuatorMode::LinearPositionPercent", EditConditionHides))
+        EditCondition="Mode == EMechanismActuatorMode::LinearPosition", EditConditionHides))
     int32 LinearAxes = static_cast<int32>(EMechanismLinearAxis::X);
 
     // Local constraint-space targets. Unreal length unit is centimeter.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Linear",
-        meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition || Mode == EMechanismActuatorMode::LinearPositionPercent",
+        meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition",
         EditConditionHides, Units="cm"))
     FVector RetractedPositionCm = FVector::ZeroVector;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Linear",
-        meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition || Mode == EMechanismActuatorMode::LinearPositionPercent",
+        meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition",
         EditConditionHides, Units="cm"))
     FVector ExtendedPositionCm = FVector(2.0, 0.0, 0.0);
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Linear",
-        meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition || Mode == EMechanismActuatorMode::LinearPositionPercent", EditConditionHides))
+        meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition", EditConditionHides))
     bool bAutoCalculateLinearLimit = true;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Linear",
-        meta=(EditCondition="(Mode == EMechanismActuatorMode::LinearPosition || Mode == EMechanismActuatorMode::LinearPositionPercent) && !bAutoCalculateLinearLimit",
+        meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition && !bAutoCalculateLinearLimit",
         EditConditionHides, ClampMin="0.01", Units="cm"))
     float LinearLimitOverrideCm = 2.0f;
 
@@ -175,12 +174,12 @@ public:
     bool bReverseAngularDirection = false;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Linear Drive",
-        meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition || Mode == EMechanismActuatorMode::LinearPositionPercent",
+        meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition",
         EditConditionHides, ClampMin="0.0"))
     float LinearPositionStrength = 5000.0f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Linear Drive",
-        meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition || Mode == EMechanismActuatorMode::LinearPositionPercent",
+        meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition",
         EditConditionHides, ClampMin="0.0"))
     float LinearVelocityStrength = 200.0f;
 
@@ -190,19 +189,19 @@ public:
      * High drive strength/force can therefore be combined with a low travel speed.
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Linear Drive",
-        meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition || Mode == EMechanismActuatorMode::LinearPositionPercent",
+        meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition",
         EditConditionHides, ClampMin="0.0", Units="cm/s",
         Delta="1.0", WheelStep="1.0",
         DisplayName="Linear Max Speed"))
     float LinearMaxSpeedCmPerSecond = 0.0f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Linear Drive",
-        meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition || Mode == EMechanismActuatorMode::LinearPositionPercent",
+        meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition",
         EditConditionHides, ClampMin="0.0"))
     float LinearMaxForce = 0.0f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Linear Drive",
-        meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition || Mode == EMechanismActuatorMode::LinearPositionPercent", EditConditionHides))
+        meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition", EditConditionHides))
     bool bLinearAccelerationDrive = false;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Angular Drive",
@@ -319,13 +318,13 @@ public:
 
     /** Freeze the moving child after the Extend To End events are sent. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Freeze",
-        meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition || Mode == EMechanismActuatorMode::LinearPositionPercent",
+        meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition",
         DisplayName="Freeze On Extend To End"))
     bool bFreezeOnExtendToEnd = false;
 
     /** Freeze the moving child after the Retract To End events are sent. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Freeze",
-        meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition || Mode == EMechanismActuatorMode::LinearPositionPercent",
+        meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition",
         DisplayName="Freeze On Retract To End"))
     bool bFreezeOnRetractToEnd = false;
 
@@ -409,14 +408,6 @@ public:
      */
     UFUNCTION(BlueprintCallable, Category="Mechanism Actuator")
     void SetPositionAlpha(float Alpha);
-
-    /**
-     * Commands a linear actuator with a PLC-style percentage. Values are
-     * clamped to 0..100, where 0 is retracted and 100 is fully extended.
-     */
-    UFUNCTION(BlueprintCallable, Category="Mechanism Actuator",
-        meta=(DisplayName="Set Linear Position Percent"))
-    void SetLinearPositionPercent(float Percent);
 
     /**
      * Commands an Angular Position actuator with a PLC-style percentage.
@@ -600,7 +591,6 @@ private:
     void SetComponentFrozen(bool bFrozen);
     bool FreezeComponentInternal();
     bool UnfreezeComponentInternal();
-    bool IsLinearPositionMode() const;
     bool UsesLinearAxis(EMechanismLinearAxis Axis) const;
 
     FVector CurrentLinearPositionTargetCm = FVector::ZeroVector;

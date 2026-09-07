@@ -115,6 +115,8 @@ Use this for a door or hinge.
 - Closed Angle Degrees: usually 0.
 - Open Angle Degrees: for example 90.
 - Angular Max Speed: 0 for legacy instant targeting, or a positive speed in deg/s.
+- Force Stop At Angular Target: enabled by default; freezes at the commanded angle.
+- Angular Target Stop Tolerance: angle tolerance for the hard stop, default 0.5 degrees.
 - Call `Open`, `Close`, `Toggle`, or `Set Actuator Active(bool)`.
 
 The chosen angular axis is Limited automatically; the other two angular axes and all linear axes are Locked. Angles are limited to less than 180 degrees by the underlying constraint.
@@ -127,9 +129,22 @@ to Open Angle Degrees. Inputs are clamped to 0..100. The legacy `Set Position
 Alpha` node remains available with its original 0..1 range so existing Blueprints
 continue to work.
 
-After Open, Close, or Set Position Alpha, **On Rotate To Target** fires once when the moving child enters its sleeping/stopped state. One event name covers both endpoint angles and intermediate alpha targets. It reports the moving component and bone name, and is available as both an assignable event and a BlueprintNativeEvent override.
+Open, Close, Toggle, Set Actuator Active, Set Position Alpha, and Set Angular
+Position Percent automatically unfreeze an Angular Position child before issuing
+a new target. **Start Rotating** is sent after the target command is armed.
 
-Enable **Freeze On Rotation Stopped** to run Freeze Component immediately after both forms of On Rotate To Target have been sent. This option shares the Mechanism|Freeze group with the Linear automatic-freeze options; only the options for the selected mode are editable.
+With **Force Stop At Angular Target** enabled, the component reads the selected
+Twist/Swing constraint angle while the command is active. Entering the configured
+tolerance or crossing the target sends **On Rotate To End** and the compatibility
+**On Rotate To Target** event, zeros angular velocity, and immediately freezes the
+child at its current pose. This prevents drive overshoot beyond the commanded
+Open/Close/Alpha angle. The next Angular Position command automatically unfreezes it.
+
+A physical obstruction may stop the child before the target. When the blocked
+body sleeps, the same rotation-end events are sent without checking the target
+angle. Enable **Freeze On Rotation Stopped** to freeze that obstructed pose.
+All rotation events report the moving component and bone name and support both
+assignable events and BlueprintNativeEvent overrides.
 
 ## Angular Velocity mode
 

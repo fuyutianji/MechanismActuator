@@ -120,6 +120,8 @@ On Leave From Retract End，再向 Extend End 运动。
 - Closed Angle Degrees 设置关闭角度；
 - Open Angle Degrees 设置打开角度；
 - Angular Max Speed：0 表示保持旧版的瞬时目标，正数表示目标最大推进角速度，单位 deg/s；
+- Force Stop At Angular Target：默认开启，到达目标角度时立即冻结；
+- Angular Target Stop Tolerance：强制停止的角度容差，默认 0.5 度；
 - 其他两个角轴和全部线性轴自动锁定。
 
 调用 Open、Close、Toggle 或 Set Actuator Active(bool)。
@@ -133,14 +135,19 @@ Word/整数值连接到 Percent：0 对应 Closed Angle Degrees，50 对应两�
 只把 Angular Max Speed 设置为需要的角速度。组件只会在限速转动期间 Tick，
 到达目标角度后会自动停止 Tick。
 
-调用 Open、Close 或 Set Position Alpha 后，活动子组件进入物理 Sleep/Stopped
-状态时会触发一次 **On Rotate To Target**。端点角度和 Set Position Alpha 的中间
-目标共用该事件；事件给出活动组件与 Bone Name，并同时支持详情面板绑定和
-BlueprintNativeEvent 覆写。
+Open、Close、Toggle、Set Actuator Active、Set Position Alpha 和
+Set Angular Position Percent 在下达新角度前都会自动 Unfreeze，随后触发
+**Start Rotating**。
 
-在同一个 **Mechanism|Freeze** 分组中启用 **Freeze On Rotation Stopped**，
-即可在两种 On Rotate To Target 事件形式都发送完成后自动执行 Freeze Component。
-该选项只在 Angular Position 模式下解锁；Linear 的两个自动冻结选项此时不可编辑。
+开启 **Force Stop At Angular Target** 后，命令运行期间会持续读取所选 Twist/Swing
+约束角度。实际角度进入容差或越过目标时，组件会触发 **On Rotate To End** 与兼容的
+**On Rotate To Target**，清零角速度并立即冻结当前姿态，防止驱动继续越过
+Open/Close/Alpha 目标。下一条 Angular Position 命令会自动 Unfreeze。
+
+如果夹爪在目标前被物体或障碍卡住，刚体进入 Sleep/Stopped 时同样触发上述结束
+事件，不要求实际角度到达目标。启用 **Freeze On Rotation Stopped** 后会冻结在
+被阻挡的位置。所有旋转事件都会给出活动组件与 Bone Name，同时支持详情面板绑定
+和 BlueprintNativeEvent 覆写。
 
 ## 转盘模式
 

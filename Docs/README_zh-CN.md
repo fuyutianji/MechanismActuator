@@ -41,7 +41,9 @@ git -C Plugins/MechanismActuator pull origin main
 6. Child Physics 通常设置为：
    - Force Child Movable：开启；
    - Child Simulate Physics：开启；
-   - Child Enable Gravity：关闭。
+   - Child Enable Gravity：关闭；
+   - Recursively Disable Inertia Conditioning And Auto Weld：默认关闭；启用后会在初始化时递归关闭
+     Child 及其全部 Primitive 子组件的 Inertia Conditioning 和 Auto Weld，并解除已有焊接。
 
    每个组件生命周期第一次成功初始化时会应用以上物理与重力设置。之后重复调用
    Initialize Actuator 会被忽略，不会覆盖游戏逻辑在运行时所做的修改。
@@ -120,7 +122,7 @@ On Leave From Retract End，再向 Extend End 运动。
 - Closed Angle Degrees 设置关闭角度；
 - Open Angle Degrees 设置打开角度；
 - Angular Max Speed：0 表示保持旧版的瞬时目标，正数表示目标最大推进角速度，单位 deg/s；
-- Force Stop At Angular Target：默认开启，到达目标角度时立即冻结；
+- Force Stop At Angular Target：默认关闭；需要到达目标角度立即冻结时再开启；
 - Angular Target Stop Tolerance：强制停止的角度容差，默认 0.5 度；
 - 其他两个角轴和全部线性轴自动锁定。
 

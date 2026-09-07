@@ -112,7 +112,7 @@ public:
      * disabling inertia conditioning and auto weld on its primitive descendants.
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Child Physics",
-        meta=(ToolTip="Maintain barycenter of the child by recursively disabling inertia conditioning and auto weld on child components"))
+        meta=(ToolTip="Maintain barycenter of the child by recursively disabling inertia conditioning and auto weld"))
     bool bMaintainBarycenter = true;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Constraint")

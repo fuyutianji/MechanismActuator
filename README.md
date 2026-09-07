@@ -8,6 +8,7 @@ Reusable Unreal Engine C++ physics actuator component for industrial mechanisms.
 - Parent and child are selected from dropdowns built from the current Blueprint component tree.
 - Parent simulation, gravity and mobility are left unchanged.
 - Child simulation, gravity and optional Movable mobility are exposed.
+- An opt-in Child Physics setting recursively disables inertia conditioning and auto weld on the configured Child hierarchy during initialization.
 - Parent/child collision is disabled by default.
 - Four modes:
   - **Linear Position**: cylinders, slides and gripper fingers.
@@ -69,6 +70,8 @@ Then:
    - Force Child Movable: true
    - Child Simulate Physics: true
    - Child Enable Gravity: false
+   - Recursively Disable Inertia Conditioning And Auto Weld: off by default;
+     enable it to apply both overrides to Child and all attached primitive descendants.
 
    These settings are applied during the first successful initialization of
    each component lifecycle. Later runtime physics and gravity changes are not
@@ -115,7 +118,7 @@ Use this for a door or hinge.
 - Closed Angle Degrees: usually 0.
 - Open Angle Degrees: for example 90.
 - Angular Max Speed: 0 for legacy instant targeting, or a positive speed in deg/s.
-- Force Stop At Angular Target: enabled by default; freezes at the commanded angle.
+- Force Stop At Angular Target: disabled by default; enable it to freeze at the commanded angle.
 - Angular Target Stop Tolerance: angle tolerance for the hard stop, default 0.5 degrees.
 - Call `Open`, `Close`, `Toggle`, or `Set Actuator Active(bool)`.
 

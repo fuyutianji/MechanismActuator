@@ -41,7 +41,9 @@ git -C Plugins/MechanismActuator pull origin main
 6. Child Physics 通常设置为：
    - Force Child Movable：开启；
    - Child Simulate Physics：开启；
-   - Child Enable Gravity：关闭。
+   - Child Enable Gravity：关闭；
+   - Maintain Barycenter：默认开启；初始化时只递归关闭 Child 下方 Primitive 子组件的
+     Inertia Conditioning 和 Auto Weld，并解除这些子组件已有的焊接。Child 自身保持不变。
 
    每个组件生命周期第一次成功初始化时会应用以上物理与重力设置。之后重复调用
    Initialize Actuator 会被忽略，不会覆盖游戏逻辑在运行时所做的修改。
@@ -49,8 +51,7 @@ git -C Plugins/MechanismActuator pull origin main
 
 ## 直线模式
 
-普通 0 到 1 控制设置 Mode = Linear Position。PLC 已提供 0 到 100 百分比值时，
-设置 Mode = **Linear Position (PLC 0-100)**。两种模式共用下面全部线性参数。
+设置 Mode = Linear Position。
 
 - Linear Axes 可以同时选 X、Y、Z；
 - 未选择的线性轴自动锁定；
@@ -72,14 +73,7 @@ git -C Plugins/MechanismActuator pull origin main
 - Extend 或 Set Actuator Active(true)：伸出；
 - Retract 或 Set Actuator Active(false)：缩回；
 - Toggle：切换状态；
-- Set Position Alpha：0 到 1 的连续位置；
-- Set Linear Position Percent：直接接收 PLC 的 0 到 100 数值。
-
-PLC 的 Word/整数值可以直接接到 **Set Linear Position Percent** 的 Percent 引脚
-（蓝图需要时会自动转换为 Float）。组件会把输入限制到 0 到 100：0 对应
-Retracted Position Cm，50 对应一半行程，100 对应 Extended Position Cm。
-例如行程设置为 0 到 20 cm 时，PLC 给 25，目标位置就是 5 cm。该模式仍然使用
-Linear Max Speed、Position Strength、Max Force、冻结和行程终点事件等原有设置。
+- Set Position Alpha：0 到 1 的连续位置。
 
 Linear 模式下，Set Position Alpha 会完整进入四个行程事件的状态机：Alpha 为 0
 仍表示 Retract End；任意大于 0 的 Alpha 都表示 Extend End，与新目标相对上一个
@@ -128,6 +122,8 @@ On Leave From Retract End，再向 Extend End 运动。
 - Closed Angle Degrees 设置关闭角度；
 - Open Angle Degrees 设置打开角度；
 - Angular Max Speed：0 表示保持旧版的瞬时目标，正数表示目标最大推进角速度，单位 deg/s；
+- Force Stop At Angular Target：默认关闭；需要到达目标角度立即冻结时再开启；
+- Angular Target Stop Tolerance：强制停止的角度容差，默认 0.5 度；
 - 其他两个角轴和全部线性轴自动锁定。
 
 调用 Open、Close、Toggle 或 Set Actuator Active(bool)。
@@ -141,14 +137,19 @@ Word/整数值连接到 Percent：0 对应 Closed Angle Degrees，50 对应两�
 只把 Angular Max Speed 设置为需要的角速度。组件只会在限速转动期间 Tick，
 到达目标角度后会自动停止 Tick。
 
-调用 Open、Close 或 Set Position Alpha 后，活动子组件进入物理 Sleep/Stopped
-状态时会触发一次 **On Rotate To Target**。端点角度和 Set Position Alpha 的中间
-目标共用该事件；事件给出活动组件与 Bone Name，并同时支持详情面板绑定和
-BlueprintNativeEvent 覆写。
+Open、Close、Toggle、Set Actuator Active、Set Position Alpha 和
+Set Angular Position Percent 在下达新角度前都会自动 Unfreeze，随后触发
+**Start Rotating**。
 
-在同一个 **Mechanism|Freeze** 分组中启用 **Freeze On Rotation Stopped**，
-即可在两种 On Rotate To Target 事件形式都发送完成后自动执行 Freeze Component。
-该选项只在 Angular Position 模式下解锁；Linear 的两个自动冻结选项此时不可编辑。
+开启 **Force Stop At Angular Target** 后，命令运行期间会持续读取所选 Twist/Swing
+约束角度。实际角度进入容差或越过目标时，组件会触发 **On Rotate To End** 与兼容的
+**On Rotate To Target**，清零角速度并立即冻结当前姿态，防止驱动继续越过
+Open/Close/Alpha 目标。下一条 Angular Position 命令会自动 Unfreeze。
+
+如果夹爪在目标前被物体或障碍卡住，刚体进入 Sleep/Stopped 时同样触发上述结束
+事件，不要求实际角度到达目标。启用 **Freeze On Rotation Stopped** 后会冻结在
+被阻挡的位置。所有旋转事件都会给出活动组件与 Bone Name，同时支持详情面板绑定
+和 BlueprintNativeEvent 覆写。
 
 ## 转盘模式
 

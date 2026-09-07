@@ -8,19 +8,19 @@ Reusable Unreal Engine C++ physics actuator component for industrial mechanisms.
 - Parent and child are selected from dropdowns built from the current Blueprint component tree.
 - Parent simulation, gravity and mobility are left unchanged.
 - Child simulation, gravity and optional Movable mobility are exposed.
+- Maintain Barycenter recursively disables inertia conditioning and auto weld on primitive descendants during initialization while preserving the configured Child's own settings.
 - Parent/child collision is disabled by default.
 - Four modes:
   - **Linear Position**: cylinders, slides and gripper fingers.
   - **Angular Position**: doors, flaps and indexed rotary mechanisms.
   - **Angular Velocity**: continuously rotating turntables and rollers.
-  - **Linear Position (PLC 0-100)**: maps a PLC percentage directly to linear stroke position.
 - Linear X/Y/Z axes are a multi-select bitmask.
 - Unselected linear axes and every angular axis are locked in Linear mode.
 - Linear limit is calculated automatically from the selected-axis target vectors.
 - Optional Linear Max Speed rate-limits target travel while retaining high drive strength and force.
 - Optional Angular Max Speed applies the same target-rate limiting to Angular Position motion.
 - Common drive, limit, projection and breakable settings are exposed; rarely used native constraint fields are hidden.
-- Blueprint functions include Set Actuator Active, Toggle, Extend, Retract, Open, Close, Set Position Alpha, Set Linear Position Percent, Set Angular Position Percent, Rotate Clockwise, Rotate Counter Clockwise, Stop Rotation, Initialize Actuator, Reinitialize Actuator, Freeze Component, Unfreeze Component and Is Component Frozen.
+- Blueprint functions include Set Actuator Active, Toggle, Extend, Retract, Open, Close, Set Position Alpha, Set Angular Position Percent, Rotate Clockwise, Rotate Counter Clockwise, Stop Rotation, Initialize Actuator, Reinitialize Actuator, Freeze Component, Unfreeze Component and Is Component Frozen.
 - On Extend To End reports a sleeping/stopped non-zero Linear target, including intermediate Set Position Alpha targets; On Retract To End is reserved for the zero target. The matching Leave events report departure from the previously reached target class.
 - On Rotate To Target reports when Angular Position motion sleeps/stops after Open, Close, or Set Position Alpha, including intermediate alpha targets.
 - The Mechanism|Freeze group exposes mode-specific automatic freezing: Linear Position enables Freeze On Extend To End and Freeze On Retract To End, while Angular Position enables Freeze On Rotation Stopped.
@@ -70,6 +70,8 @@ Then:
    - Force Child Movable: true
    - Child Simulate Physics: true
    - Child Enable Gravity: false
+   - Maintain Barycenter: enabled by default; recursively disables both options
+     only on attached primitive descendants. The configured Child remains unchanged.
 
    These settings are applied during the first successful initialization of
    each component lifecycle. Later runtime physics and gravity changes are not
@@ -100,13 +102,6 @@ Extend End when the new command starts and On Extend To End when the child
 sleeps/stops at 40%. Moving from a non-zero target to 0 ends with On Retract To
 End. All four Linear end/leave events therefore also apply to alpha commands.
 
-For a PLC value already scaled to 0..100, select **Linear Position (PLC 0-100)**
-and connect the Word/integer value (converted to float by Blueprint if needed)
-directly to `Set Linear Position Percent`. The input is clamped: 0 maps to
-Retracted Position Cm, 50 maps to the midpoint, and 100 maps to Extended Position
-Cm. This mode uses the same axes, drive strength, speed limit, force, freeze and
-end-event settings as Linear Position.
-
 For multiple-axis movement, select multiple axes and put the desired values in the vector. Example X=2 and Z=1 produces a limit radius of sqrt(2^2 + 1^2) = 2.236 cm.
 
 Important: Chaos uses one radial/spherical linear limit for all Limited axes, not an independent box limit for each axis. Multi-axis targets are supported, but external forces may move the child anywhere inside that shared radius.
@@ -123,6 +118,8 @@ Use this for a door or hinge.
 - Closed Angle Degrees: usually 0.
 - Open Angle Degrees: for example 90.
 - Angular Max Speed: 0 for legacy instant targeting, or a positive speed in deg/s.
+- Force Stop At Angular Target: disabled by default; enable it to freeze at the commanded angle.
+- Angular Target Stop Tolerance: angle tolerance for the hard stop, default 0.5 degrees.
 - Call `Open`, `Close`, `Toggle`, or `Set Actuator Active(bool)`.
 
 The chosen angular axis is Limited automatically; the other two angular axes and all linear axes are Locked. Angles are limited to less than 180 degrees by the underlying constraint.
@@ -135,9 +132,22 @@ to Open Angle Degrees. Inputs are clamped to 0..100. The legacy `Set Position
 Alpha` node remains available with its original 0..1 range so existing Blueprints
 continue to work.
 
-After Open, Close, or Set Position Alpha, **On Rotate To Target** fires once when the moving child enters its sleeping/stopped state. One event name covers both endpoint angles and intermediate alpha targets. It reports the moving component and bone name, and is available as both an assignable event and a BlueprintNativeEvent override.
+Open, Close, Toggle, Set Actuator Active, Set Position Alpha, and Set Angular
+Position Percent automatically unfreeze an Angular Position child before issuing
+a new target. **Start Rotating** is sent after the target command is armed.
 
-Enable **Freeze On Rotation Stopped** to run Freeze Component immediately after both forms of On Rotate To Target have been sent. This option shares the Mechanism|Freeze group with the Linear automatic-freeze options; only the options for the selected mode are editable.
+With **Force Stop At Angular Target** enabled, the component reads the selected
+Twist/Swing constraint angle while the command is active. Entering the configured
+tolerance or crossing the target sends **On Rotate To End** and the compatibility
+**On Rotate To Target** event, zeros angular velocity, and immediately freezes the
+child at its current pose. This prevents drive overshoot beyond the commanded
+Open/Close/Alpha angle. The next Angular Position command automatically unfreezes it.
+
+A physical obstruction may stop the child before the target. When the blocked
+body sleeps, the same rotation-end events are sent without checking the target
+angle. Enable **Freeze On Rotation Stopped** to freeze that obstructed pose.
+All rotation events report the moving component and bone name and support both
+assignable events and BlueprintNativeEvent overrides.
 
 ## Angular Velocity mode
 

@@ -1,5 +1,5 @@
-// Implements actuator setup/commands, rate-limited drive targets, child
-// motion-stop forwarding, and reversible freeze/unfreeze restoration.
+// Implements actuator setup/commands, rate-limited drive targets, angular
+// target hard stops, motion events, and reversible freeze/unfreeze restoration.
 #include "MechanismActuatorComponent.h"
 
 #include "Components/PrimitiveComponent.h"
@@ -59,6 +59,7 @@ void UMechanismActuatorComponent::UninitializeComponent()
     bAngularSpeedTargetInitialized = false;
     bWaitingForLinearMotionStop = false;
     bWaitingForAngularTargetStop = false;
+    bAngularTargetHardStopArmed = false;
     bLinearEndCommandActive = false;
     bInitialLinearEndPrepared = false;
     bLinearEndWakeSuppressedUntilCommand = false;
@@ -131,6 +132,11 @@ void UMechanismActuatorComponent::TickComponent(
     if (Mode != EMechanismActuatorMode::AngularPosition)
     {
         SetComponentTickEnabled(false);
+        return;
+    }
+
+    if (TryForceStopAtAngularTarget())
+    {
         return;
     }
 
@@ -284,6 +290,7 @@ bool UMechanismActuatorComponent::InitializeActuator()
 
     bWaitingForLinearMotionStop = false;
     bWaitingForAngularTargetStop = false;
+    bAngularTargetHardStopArmed = false;
     bLinearEndCommandActive = false;
     bHasReachedLinearEnd = false;
     UnbindMovingComponentEvents();
@@ -354,6 +361,7 @@ bool UMechanismActuatorComponent::ReinitializeActuator()
 
     bWaitingForLinearMotionStop = false;
     bWaitingForAngularTargetStop = false;
+    bAngularTargetHardStopArmed = false;
     bLinearEndCommandActive = false;
     bHasReachedLinearEnd = false;
     bActuatorInitialized = false;
@@ -528,6 +536,28 @@ FRotator UMechanismActuatorComponent::MakeAngularTarget(
     }
 }
 
+float UMechanismActuatorComponent::GetCurrentAngularPositionDegrees() const
+{
+    switch (AngularPositionAxis)
+    {
+        case EMechanismAngularAxis::TwistX:
+            return GetCurrentTwist();
+        case EMechanismAngularAxis::Swing1Z:
+            return GetCurrentSwing1();
+        case EMechanismAngularAxis::Swing2Y:
+            return GetCurrentSwing2();
+        default:
+            return 0.0f;
+    }
+}
+
+float UMechanismActuatorComponent::GetPhysicalAngularTargetDegrees() const
+{
+    return bReverseAngularDirection
+        ? -DesiredAngularPositionTargetDegrees
+        : DesiredAngularPositionTargetDegrees;
+}
+
 void UMechanismActuatorComponent::ConfigureAngularPosition()
 {
     SetLinearXLimit(LCM_Locked, 0.0f);
@@ -697,6 +727,113 @@ void UMechanismActuatorComponent::ArmAngularTargetStoppedEvent()
         && IsValid(BoundSleepComponent.Get());
 }
 
+void UMechanismActuatorComponent::ArmAngularTargetHardStop()
+{
+    bAngularTargetHardStopArmed =
+        bForceStopAtAngularTarget
+        && bWaitingForAngularTargetStop
+        && Mode == EMechanismActuatorMode::AngularPosition
+        && bActuatorInitialized
+        && !bComponentFrozen
+        && ConstraintInstance.IsValidConstraintInstance();
+
+    if (bAngularTargetHardStopArmed)
+    {
+        InitialAngularTargetErrorDegrees = FMath::FindDeltaAngleDegrees(
+            GetCurrentAngularPositionDegrees(),
+            GetPhysicalAngularTargetDegrees());
+    }
+
+    RefreshAngularSpeedTick();
+}
+
+bool UMechanismActuatorComponent::TryForceStopAtAngularTarget()
+{
+    if (!bAngularTargetHardStopArmed)
+    {
+        return false;
+    }
+
+    if (!bWaitingForAngularTargetStop
+        || Mode != EMechanismActuatorMode::AngularPosition
+        || !bActuatorInitialized
+        || bComponentFrozen)
+    {
+        bAngularTargetHardStopArmed = false;
+        RefreshAngularSpeedTick();
+        return false;
+    }
+
+    const float CurrentErrorDegrees = FMath::FindDeltaAngleDegrees(
+        GetCurrentAngularPositionDegrees(),
+        GetPhysicalAngularTargetDegrees());
+    const float ToleranceDegrees =
+        FMath::Max(0.01f, AngularTargetStopToleranceDegrees);
+    const bool bReachedTolerance =
+        FMath::Abs(CurrentErrorDegrees) <= ToleranceDegrees;
+    const bool bCrossedTarget =
+        (InitialAngularTargetErrorDegrees > ToleranceDegrees
+            && CurrentErrorDegrees <= 0.0f)
+        || (InitialAngularTargetErrorDegrees < -ToleranceDegrees
+            && CurrentErrorDegrees >= 0.0f);
+
+    if (!bReachedTolerance && !bCrossedTarget)
+    {
+        return false;
+    }
+
+    CurrentAngularPositionTargetDegrees =
+        DesiredAngularPositionTargetDegrees;
+    SetAngularOrientationTarget(
+        MakeAngularTarget(CurrentAngularPositionTargetDegrees));
+
+    UPrimitiveComponent* MovingComponent = BoundSleepComponent.Get();
+    if (!IsValid(MovingComponent))
+    {
+        MovingComponent = GetMovingComponent();
+    }
+    if (!IsValid(MovingComponent))
+    {
+        bAngularTargetHardStopArmed = false;
+        RefreshAngularSpeedTick();
+        return false;
+    }
+
+    MovingComponent->SetPhysicsAngularVelocityInDegrees(
+        FVector::ZeroVector, false, ChildBoneName);
+    CompleteAngularPositionMotion(
+        MovingComponent, ChildBoneName, true);
+    return true;
+}
+
+void UMechanismActuatorComponent::CompleteAngularPositionMotion(
+    UPrimitiveComponent* MovingComponent, const FName BoneName,
+    const bool bForceFreeze)
+{
+    if (!bWaitingForAngularTargetStop
+        || Mode != EMechanismActuatorMode::AngularPosition
+        || !IsValid(MovingComponent))
+    {
+        return;
+    }
+
+    bWaitingForAngularTargetStop = false;
+    bAngularTargetHardStopArmed = false;
+    ReceiveRotateToEnd(MovingComponent, BoneName);
+    OnRotateToEnd.Broadcast(MovingComponent, BoneName);
+    ReceiveRotateToTarget(MovingComponent, BoneName);
+    OnRotateToTarget.Broadcast(MovingComponent, BoneName);
+
+    if (bForceFreeze || bFreezeOnRotationStopped)
+    {
+        FreezeComponentInternal();
+    }
+    else
+    {
+        RefreshAngularSpeedTick();
+    }
+}
+
 void UMechanismActuatorComponent::PrepareInitialLinearEnd()
 {
     if (bInitialLinearEndPrepared
@@ -730,23 +867,10 @@ void UMechanismActuatorComponent::HandleMovingComponentSleep(
 
     if (Mode == EMechanismActuatorMode::AngularPosition)
     {
-        if (!bWaitingForAngularTargetStop)
-        {
-            return;
-        }
-
-        bWaitingForAngularTargetStop = false;
-        ReceiveRotateToEnd(SleepingComponent, BoneName);
-        OnRotateToEnd.Broadcast(SleepingComponent, BoneName);
-        ReceiveRotateToTarget(SleepingComponent, BoneName);
-        OnRotateToTarget.Broadcast(SleepingComponent, BoneName);
-
-        // Match the Linear To End flow: send both event forms before replacing
-        // the rigid body with the frozen Keep World attachment.
-        if (bFreezeOnRotationStopped)
-        {
-            FreezeComponentInternal();
-        }
+        // Sleeping before the target is valid completion too: an obstruction
+        // can physically stop a gripper without reaching the commanded angle.
+        CompleteAngularPositionMotion(
+            SleepingComponent, BoneName, false);
         return;
     }
 
@@ -976,7 +1100,15 @@ void UMechanismActuatorComponent::RefreshAngularSpeedTick()
             DesiredAngularPositionTargetDegrees,
             KINDA_SMALL_NUMBER);
 
-    SetComponentTickEnabled(bShouldAdvanceTarget);
+    const bool bShouldMonitorHardStop =
+        bAngularTargetHardStopArmed
+        && bWaitingForAngularTargetStop
+        && Mode == EMechanismActuatorMode::AngularPosition
+        && bActuatorInitialized
+        && !bComponentFrozen;
+
+    SetComponentTickEnabled(
+        bShouldAdvanceTarget || bShouldMonitorHardStop);
 }
 
 void UMechanismActuatorComponent::RefreshLinearSpeedTick()
@@ -1079,8 +1211,14 @@ void UMechanismActuatorComponent::SetActuatorActive(const bool bActive)
 
     ArmLinearMotionStoppedEvent();
     ArmAngularTargetStoppedEvent();
-    BroadcastStartRotating();
     ApplyCurrentState();
+
+    if (Mode == EMechanismActuatorMode::AngularPosition)
+    {
+        ArmAngularTargetHardStop();
+        BroadcastStartRotating();
+    }
+
     OnStateChanged.Broadcast(bActuatorActive, Mode);
 }
 
@@ -1127,6 +1265,7 @@ void UMechanismActuatorComponent::SetPositionAlpha(float Alpha)
     Alpha = FMath::Clamp(Alpha, 0.0f, 1.0f);
     bWaitingForLinearMotionStop = false;
     bWaitingForAngularTargetStop = false;
+    bAngularTargetHardStopArmed = false;
 
     if (Mode == EMechanismActuatorMode::LinearPosition)
     {
@@ -1157,6 +1296,7 @@ void UMechanismActuatorComponent::SetPositionAlpha(float Alpha)
         RequestAngularPositionTarget(
             FMath::Lerp(ClosedAngleDegrees, OpenAngleDegrees, Alpha));
         ArmAngularTargetStoppedEvent();
+        ArmAngularTargetHardStop();
 
         bActuatorActive = Alpha >= 0.5f;
         UpdateExposedStates();
@@ -1299,6 +1439,7 @@ bool UMechanismActuatorComponent::FreezeComponentInternal()
     // can then emit the correct Leave From End event.
     bWaitingForLinearMotionStop = false;
     bWaitingForAngularTargetStop = false;
+    bAngularTargetHardStopArmed = false;
     bLinearEndCommandActive = false;
     bLinearEndWakeSuppressedUntilCommand = bHasReachedLinearEnd;
 

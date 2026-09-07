@@ -156,6 +156,22 @@ public:
         EditConditionHides, Units="deg"))
     float OpenAngleDegrees = 90.0f;
 
+    /**
+     * Stops and freezes the moving child as soon as the selected constraint
+     * axis reaches or crosses the commanded Angular Position target.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Angular Position",
+        meta=(EditCondition="Mode == EMechanismActuatorMode::AngularPosition",
+        EditConditionHides, DisplayName="Force Stop At Angular Target"))
+    bool bForceStopAtAngularTarget = true;
+
+    /** Angular distance treated as reaching the commanded hard-stop target. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Angular Position",
+        meta=(EditCondition="Mode == EMechanismActuatorMode::AngularPosition && bForceStopAtAngularTarget",
+        EditConditionHides, ClampMin="0.01", ClampMax="10.0", Units="deg",
+        DisplayName="Angular Target Stop Tolerance"))
+    float AngularTargetStopToleranceDegrees = 0.5f;
+
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Angular Velocity",
         meta=(EditCondition="Mode == EMechanismActuatorMode::AngularVelocity", EditConditionHides))
     EMechanismAngularAxis AngularVelocityAxis = EMechanismAngularAxis::TwistX;
@@ -557,6 +573,8 @@ private:
     UPrimitiveComponent* FindPrimitiveComponent(FName ComponentName) const;
     FVector FilterLinearTarget(const FVector& Target) const;
     FRotator MakeAngularTarget(float AngleDegrees) const;
+    float GetCurrentAngularPositionDegrees() const;
+    float GetPhysicalAngularTargetDegrees() const;
     FVector MakeAngularVelocityTarget(float RevolutionsPerSecond) const;
     void ConfigureCommonConstraint();
     void ConfigureLinearPosition();
@@ -575,6 +593,11 @@ private:
     void UnbindMovingComponentEvents();
     void ArmLinearMotionStoppedEvent();
     void ArmAngularTargetStoppedEvent();
+    void ArmAngularTargetHardStop();
+    bool TryForceStopAtAngularTarget();
+    void CompleteAngularPositionMotion(
+        UPrimitiveComponent* MovingComponent, FName BoneName,
+        bool bForceFreeze);
     void BroadcastStartRotating();
     void PrepareInitialLinearEnd();
 
@@ -599,6 +622,8 @@ private:
     float CurrentAngularPositionTargetDegrees = 0.0f;
     float DesiredAngularPositionTargetDegrees = 0.0f;
     bool bAngularSpeedTargetInitialized = false;
+    bool bAngularTargetHardStopArmed = false;
+    float InitialAngularTargetErrorDegrees = 0.0f;
     bool bWaitingForLinearMotionStop = false;
     bool bWaitingForAngularTargetStop = false;
     bool bLinearEndCommandActive = false;

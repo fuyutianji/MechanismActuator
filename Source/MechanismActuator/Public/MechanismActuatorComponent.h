@@ -107,6 +107,14 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Child Physics")
     bool bChildEnableGravity = false;
 
+    /**
+     * During initialization, disables inertia conditioning and auto weld on the
+     * configured Child and every primitive component below it in the attachment tree.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Child Physics",
+        meta=(DisplayName="Recursively Disable Inertia Conditioning And Auto Weld"))
+    bool bRecursivelyDisableInertiaConditioningAndAutoWeld = false;
+
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Constraint")
     bool bDisableCollision = true;
 
@@ -163,7 +171,7 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Angular Position",
         meta=(EditCondition="Mode == EMechanismActuatorMode::AngularPosition",
         EditConditionHides, DisplayName="Force Stop At Angular Target"))
-    bool bForceStopAtAngularTarget = true;
+    bool bForceStopAtAngularTarget = false;
 
     /** Angular distance treated as reaching the commanded hard-stop target. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Angular Position",
@@ -571,6 +579,7 @@ private:
     void SyncEditorConstraintPreview();
 #endif
     UPrimitiveComponent* FindPrimitiveComponent(FName ComponentName) const;
+    void ApplyChildPhysicsOverridesRecursively(UPrimitiveComponent* Child);
     FVector FilterLinearTarget(const FVector& Target) const;
     FRotator MakeAngularTarget(float AngleDegrees) const;
     float GetCurrentAngularPositionDegrees() const;

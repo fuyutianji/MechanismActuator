@@ -1,4 +1,4 @@
-// Implements actuator setup/commands, recursive child-physics overrides,
+// Implements actuator setup/commands, recursive descendant-physics overrides,
 // rate-limited drive targets, target hard stops, events, and freeze restoration.
 #include "MechanismActuatorComponent.h"
 
@@ -263,8 +263,7 @@ UPrimitiveComponent* UMechanismActuatorComponent::FindPrimitiveComponent(
 void UMechanismActuatorComponent::ApplyChildPhysicsOverridesRecursively(
     UPrimitiveComponent* Child)
 {
-    if (!bRecursivelyDisableInertiaConditioningAndAutoWeld
-        || !IsValid(Child))
+    if (!bMaintainBarycenter || !IsValid(Child))
     {
         return;
     }
@@ -298,14 +297,13 @@ void UMechanismActuatorComponent::ApplyChildPhysicsOverridesRecursively(
         }
     };
 
-    // Process leaves first so every welded descendant is separated from its
-    // immediate parent before the configured Child itself is handled.
+    // Process only descendants, deepest first. The configured Child's own
+    // inertia-conditioning, auto-weld, and current weld state stay unchanged.
     for (int32 Index = Descendants.Num() - 1; Index >= 0; --Index)
     {
         DisablePhysicsOptions(
             Cast<UPrimitiveComponent>(Descendants[Index]));
     }
-    DisablePhysicsOptions(Child);
 }
 
 UPrimitiveComponent* UMechanismActuatorComponent::GetParentComponent() const

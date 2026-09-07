@@ -1,5 +1,5 @@
-// Implements actuator setup/commands, rate-limited drive targets, angular
-// target hard stops, motion events, and reversible freeze/unfreeze restoration.
+// Implements actuator setup/commands, recursive child-physics overrides,
+// rate-limited drive targets, target hard stops, events, and freeze restoration.
 #include "MechanismActuatorComponent.h"
 
 #include "Components/PrimitiveComponent.h"
@@ -260,6 +260,54 @@ UPrimitiveComponent* UMechanismActuatorComponent::FindPrimitiveComponent(
     return nullptr;
 }
 
+void UMechanismActuatorComponent::ApplyChildPhysicsOverridesRecursively(
+    UPrimitiveComponent* Child)
+{
+    if (!bRecursivelyDisableInertiaConditioningAndAutoWeld
+        || !IsValid(Child))
+    {
+        return;
+    }
+
+    TArray<USceneComponent*> Descendants;
+    Child->GetChildrenComponents(true, Descendants);
+
+    const auto DisablePhysicsOptions = [](UPrimitiveComponent* Primitive)
+    {
+        if (!IsValid(Primitive))
+        {
+            return;
+        }
+
+        // Disable future automatic welds before breaking an existing weld.
+        Primitive->BodyInstance.bAutoWeld = false;
+        if (Primitive->IsWelded())
+        {
+            Primitive->UnWeldFromParent();
+        }
+
+        Primitive->BodyInstance.SetInertiaConditioningEnabled(false);
+
+        // Some primitive types expose a different live body instance.
+        if (FBodyInstance* LiveBody =
+                Primitive->GetBodyInstance(NAME_None, false);
+            LiveBody && LiveBody != &Primitive->BodyInstance)
+        {
+            LiveBody->bAutoWeld = false;
+            LiveBody->SetInertiaConditioningEnabled(false);
+        }
+    };
+
+    // Process leaves first so every welded descendant is separated from its
+    // immediate parent before the configured Child itself is handled.
+    for (int32 Index = Descendants.Num() - 1; Index >= 0; --Index)
+    {
+        DisablePhysicsOptions(
+            Cast<UPrimitiveComponent>(Descendants[Index]));
+    }
+    DisablePhysicsOptions(Child);
+}
+
 UPrimitiveComponent* UMechanismActuatorComponent::GetParentComponent() const
 {
     return FindPrimitiveComponent(ParentComponentName);
@@ -314,6 +362,7 @@ bool UMechanismActuatorComponent::InitializeActuator()
     }
 
     EnsureConstraintFrameOnParent(Parent, Child);
+    ApplyChildPhysicsOverridesRecursively(Child);
 
     // Deliberately do not modify any parent physical state.
     if (bForceChildMovable && Child->Mobility != EComponentMobility::Movable)

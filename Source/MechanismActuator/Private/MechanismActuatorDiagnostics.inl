@@ -27,6 +27,12 @@ void UMechanismActuatorComponent::LogMechanismChainState(const TCHAR* Phase) con
         FBodyInstance* EffectiveBody = Component->GetBodyInstance(NAME_None, true);
         FBodyInstance* WeldParent = OwnBody ? OwnBody->WeldParent : nullptr;
         UE_LOG(LogMechanismActuator, Log,
+            TEXT("[ActuatorDriven][Chain] Sample=%llu Body='%s' TemplateInertiaConditioning=%d OwnInertiaConditioning=%d CollisionEnabled=%d ObjectType=%d Profile='%s'"),
+            Sample, *Component->GetName(), Component->BodyInstance.IsInertiaConditioningEnabled(),
+            OwnBody ? static_cast<int32>(OwnBody->IsInertiaConditioningEnabled()) : -1,
+            static_cast<int32>(Component->GetCollisionEnabled()), static_cast<int32>(Component->GetCollisionObjectType()),
+            *Component->GetCollisionProfileName().ToString());
+        UE_LOG(LogMechanismActuator, Log,
             TEXT("[ActuatorDriven][Chain] Sample=%llu Body='%s' AttachParent='%s' Socket='%s' Simulating=%d OwnSimulateFlag=%d Awake=%d PhysicsState=%d Gravity=%d"),
             Sample, *Component->GetName(), *GetPathNameSafe(Component->GetAttachParent()),
             *Component->GetAttachSocketName().ToString(), Component->IsSimulatingPhysics(),
@@ -59,6 +65,39 @@ void UMechanismActuatorComponent::LogMechanismChainState(const TCHAR* Phase) con
         FName ActualParentBone;
         FName ActualChildBone;
         Actuator->GetConstrainedComponents(ActualParent, ActualParentBone, ActualChild, ActualChildBone);
+        UE_LOG(LogMechanismActuator, Log,
+            TEXT("[ActuatorDriven][Chain] Sample=%llu Actuator='%s' StartFrozen=%d MaintainBarycenter=%d DisableCollisionConfigured=%d Projection=%d ParentDominates=%d"),
+            Sample, *Actuator->GetName(), Actuator->bStartFrozen, Actuator->bMaintainBarycenter,
+            Actuator->bDisableCollision, Actuator->bEnableProjection, Actuator->bParentDominates);
+        // Geometric separation is not a solver error: free/limited axes and
+        // nonzero drive targets can legitimately separate the two joint frames.
+        if (IsValid(ActualParent) && IsValid(ActualChild))
+        {
+            const FTransform Frame1 = Actuator->bHasSavedConstraintState
+                ? Actuator->SavedConstraintFrame1 : Actuator->ConstraintInstance.GetRefFrame(EConstraintFrame::Frame1);
+            const FTransform Frame2 = Actuator->bHasSavedConstraintState
+                ? Actuator->SavedConstraintFrame2 : Actuator->ConstraintInstance.GetRefFrame(EConstraintFrame::Frame2);
+            FBodyInstance* ParentBody = ActualParent->GetBodyInstance(ActualParentBone, false);
+            FBodyInstance* ChildBody = ActualChild->GetBodyInstance(ActualChildBone, false);
+            if (ParentBody && ChildBody && ParentBody->IsValidBodyInstance() && ChildBody->IsValidBodyInstance())
+            {
+                const FTransform World1 = Frame1 * ParentBody->GetUnrealWorldTransform();
+                const FTransform World2 = Frame2 * ChildBody->GetUnrealWorldTransform();
+                UE_LOG(LogMechanismActuator, Log,
+                    TEXT("[ActuatorDriven][Chain] Sample=%llu Actuator='%s' FrameSource=%s Frame1=%s Frame2=%s"),
+                    Sample, *Actuator->GetName(), Actuator->bHasSavedConstraintState ? TEXT("Saved") : TEXT("Live"),
+                    *Frame1.ToString(), *Frame2.ToString());
+                UE_LOG(LogMechanismActuator, Log,
+                    TEXT("[ActuatorDriven][Chain] Sample=%llu Actuator='%s' JointDeltaInFrame1=%s JointAngleDeg=%.6f LinearTarget=%s AngularTarget=%s ParentToChildResponse=%d ChildToParentResponse=%d"),
+                    Sample, *Actuator->GetName(),
+                    *World1.InverseTransformVectorNoScale(World2.GetLocation() - World1.GetLocation()).ToString(),
+                    FMath::RadiansToDegrees(World1.GetRotation().AngularDistance(World2.GetRotation())),
+                    *Actuator->ConstraintInstance.GetLinearPositionTarget().ToString(),
+                    *Actuator->ConstraintInstance.GetAngularOrientationTarget().ToString(),
+                    static_cast<int32>(ActualParent->GetCollisionResponseToChannel(ActualChild->GetCollisionObjectType())),
+                    static_cast<int32>(ActualChild->GetCollisionResponseToChannel(ActualParent->GetCollisionObjectType())));
+            }
+        }
         UE_LOG(LogMechanismActuator, Log,
             TEXT("[ActuatorDriven][Chain] Sample=%llu Actuator='%s' Mode=%s Frozen=%d Initialized=%d Active=%d SavedConstraint=%d JointValid=%d Terminated=%d Broken=%d TransitionDepth=%d CommandRevision=%llu"),
             Sample, *Actuator->GetName(), GetMechanismActuatorModeName(Actuator->Mode),

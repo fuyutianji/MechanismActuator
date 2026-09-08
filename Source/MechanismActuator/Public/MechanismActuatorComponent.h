@@ -340,8 +340,9 @@ public:
         DeprecationMessage="Use Is Component Frozen instead."))
     bool bComponentSleepFrozen = false;
 
-    /** Freeze at the current pose after initialization, preserving the normal thaw snapshot.
-     * Requires Child Simulate Physics. Explicit reinitialization reapplies this option.
+    /** Freeze synchronously after all registered automatic MAs on this actor initialize.
+     * New commands cancel the pending freeze. Requires Child Simulate Physics.
+     * Explicit reinitialization schedules this option again.
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Freeze",
         meta=(DisplayName="Start Frozen", EditCondition="bChildSimulatePhysics"))
@@ -606,6 +607,12 @@ private:
     };
     int32 PhysicsTransitionDepth = 0;
     uint64 MotionCommandRevision = 0;
+    // Invalidates deferred initialization work across commands/lifecycle changes.
+    uint64 StartFrozenRequestRevision = 0;
+    bool bStartFrozenPending = false;
+    uint64 PendingStartFrozenRequest = 0;
+    uint64 PendingStartFrozenCommand = 0;
+    void TryCompleteStartFrozenInitialization();
 
     /** Runtime state needed to rebuild another actuator whose joint references a recreated body. */
     struct FDependentConstraintSnapshot

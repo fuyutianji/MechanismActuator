@@ -69,10 +69,16 @@ void UMechanismActuatorComponent::InitializeComponent()
     {
         InitializeActuator();
     }
+    if (World && World->IsGameWorld())
+    {
+        TryCompleteStartFrozenInitialization();
+    }
 }
 
 void UMechanismActuatorComponent::UninitializeComponent()
 {
+    ++StartFrozenRequestRevision;
+    bStartFrozenPending = false;
     // A later InitializeComponent call belongs to a new component lifecycle and
     // must be allowed to configure the constraint again.
     SetComponentTickEnabled(false);
@@ -286,19 +292,33 @@ void UMechanismActuatorComponent::ApplyChildPhysicsOverridesRecursively(
 {
     if (!bMaintainBarycenter || !IsValid(Child))
     {
+        UE_LOG(LogMechanismActuator, Log,
+            TEXT("[ActuatorDriven][InitOverride] Skipped Source='%s' Child='%s' MaintainBarycenter=%d"),
+            *GetPathName(), *GetNameSafe(Child), bMaintainBarycenter);
         return;
     }
 
     TArray<USceneComponent*> Descendants;
     Child->GetChildrenComponents(true, Descendants);
+    UE_LOG(LogMechanismActuator, Log,
+        TEXT("[ActuatorDriven][InitOverride] Begin Source='%s' Child='%s' Descendants=%d StartFrozen=%d"),
+        *GetPathName(), *Child->GetName(), Descendants.Num(), bStartFrozen);
+    LogMechanismChainState(TEXT("Initialize.BeforeRecursiveOverrides"));
 
-    const auto DisablePhysicsOptions = [](UPrimitiveComponent* Primitive)
+    const auto DisablePhysicsOptions = [this](UPrimitiveComponent* Primitive)
     {
         if (!IsValid(Primitive))
         {
             return;
         }
 
+        const bool bInertiaBefore = Primitive->BodyInstance.IsInertiaConditioningEnabled();
+        const bool bAutoWeldBefore = Primitive->BodyInstance.bAutoWeld;
+        const bool bWeldedBefore = Primitive->IsWelded();
+        UE_LOG(LogMechanismActuator, Log,
+            TEXT("[ActuatorDriven][InitOverride] Before Source='%s' Target='%s' AttachParent='%s' InertiaConditioning=%d AutoWeld=%d Welded=%d"),
+            *GetPathName(), *Primitive->GetName(), *GetNameSafe(Primitive->GetAttachParent()),
+            bInertiaBefore, bAutoWeldBefore, bWeldedBefore);
         // Disable future automatic welds before breaking an existing weld.
         Primitive->BodyInstance.bAutoWeld = false;
         if (Primitive->IsWelded())
@@ -316,6 +336,10 @@ void UMechanismActuatorComponent::ApplyChildPhysicsOverridesRecursively(
             LiveBody->bAutoWeld = false;
             LiveBody->SetInertiaConditioningEnabled(false);
         }
+        UE_LOG(LogMechanismActuator, Log,
+            TEXT("[ActuatorDriven][InitOverride] After Source='%s' Target='%s' InertiaConditioning=%d AutoWeld=%d Welded=%d UnweldRequested=%d"),
+            *GetPathName(), *Primitive->GetName(), Primitive->BodyInstance.IsInertiaConditioningEnabled(),
+            Primitive->BodyInstance.bAutoWeld, Primitive->IsWelded(), bWeldedBefore);
     };
 
     // Process only descendants, deepest first. The configured Child's own
@@ -325,6 +349,7 @@ void UMechanismActuatorComponent::ApplyChildPhysicsOverridesRecursively(
         DisablePhysicsOptions(
             Cast<UPrimitiveComponent>(Descendants[Index]));
     }
+    LogMechanismChainState(TEXT("Initialize.AfterRecursiveOverrides"));
 }
 
 UPrimitiveComponent* UMechanismActuatorComponent::GetParentComponent() const
@@ -433,19 +458,60 @@ bool UMechanismActuatorComponent::InitializeActuator()
     PrepareInitialLinearEnd();
     if (bStartFrozen)
     {
-        // Capture initialized frames/targets through the same protected path as
-        // gameplay freezing. Do not synthesize endpoint events or a frozen flag.
-        const bool bFrozenSuccessfully = FreezeComponentInternal();
-        UE_LOG(LogMechanismActuator, Log,
-            TEXT("[ActuatorDriven] Start Frozen completed: Actuator='%s', Success=%d, Frozen=%d."),
-            *GetPathName(), bFrozenSuccessfully, bComponentFrozen);
-        return bFrozenSuccessfully;
+        bStartFrozenPending = true;
+        PendingStartFrozenRequest = ++StartFrozenRequestRevision;
+        PendingStartFrozenCommand = MotionCommandRevision;
     }
+    TryCompleteStartFrozenInitialization();
     return true;
+}
+
+// Synchronous initialization barrier: no timer, latent work or physics step.
+// Manual (Auto Initialize off) MAs do not block automatic initialization.
+void UMechanismActuatorComponent::TryCompleteStartFrozenInitialization()
+{
+    if (!GetWorld() || !GetWorld()->IsGameWorld() || !IsValid(GetOwner()))
+    {
+        return;
+    }
+    TInlineComponentArray<UMechanismActuatorComponent*> Actuators;
+    GetOwner()->GetComponents(Actuators);
+    for (UMechanismActuatorComponent* Actuator : Actuators)
+    {
+        if (IsValid(Actuator) && Actuator->IsRegistered()
+            && (!Actuator->HasBeenInitialized()
+                || (Actuator->bAutoInitialize && !Actuator->bActuatorInitialized)))
+        {
+            return;
+        }
+    }
+    // All initialization overrides have finished before the first reattachment.
+    for (UMechanismActuatorComponent* Actuator : Actuators)
+    {
+        if (!IsValid(Actuator) || !Actuator->IsRegistered() || !Actuator->bStartFrozenPending)
+        {
+            continue;
+        }
+        Actuator->bStartFrozenPending = false;
+        if (Actuator->PendingStartFrozenRequest != Actuator->StartFrozenRequestRevision
+            || Actuator->PendingStartFrozenCommand != Actuator->MotionCommandRevision
+            || !Actuator->bStartFrozen || !Actuator->bActuatorInitialized || Actuator->bComponentFrozen)
+        {
+            UE_LOG(LogMechanismActuator, Log,
+                TEXT("[ActuatorDriven] Synchronous Start Frozen cancelled: Actuator='%s'."), *Actuator->GetPathName());
+            continue;
+        }
+        Actuator->LogMechanismChainState(TEXT("StartFrozen.AllInitializedBeforeFreeze"));
+        const bool bSuccess = Actuator->FreezeComponentInternal();
+        UE_LOG(LogMechanismActuator, Log,
+            TEXT("[ActuatorDriven] Synchronous Start Frozen completed: Actuator='%s', Success=%d, Frozen=%d."),
+            *Actuator->GetPathName(), bSuccess, Actuator->bComponentFrozen);
+    }
 }
 
 bool UMechanismActuatorComponent::ReinitializeActuator()
 {
+    ++StartFrozenRequestRevision;
     if (bComponentFrozen)
     {
         UE_LOG(LogMechanismActuator, Warning,
@@ -1871,6 +1937,7 @@ void UMechanismActuatorComponent::FreezeComponent()
 
 bool UMechanismActuatorComponent::FreezeComponentInternal()
 {
+    ++StartFrozenRequestRevision;
     if (bComponentFrozen)
     {
         UE_LOG(LogMechanismActuator, Log,
@@ -2108,6 +2175,7 @@ void UMechanismActuatorComponent::UnfreezeComponent()
 
 bool UMechanismActuatorComponent::UnfreezeComponentInternal()
 {
+    ++StartFrozenRequestRevision;
     if (!bComponentFrozen)
     {
         UE_LOG(LogMechanismActuator, Verbose,

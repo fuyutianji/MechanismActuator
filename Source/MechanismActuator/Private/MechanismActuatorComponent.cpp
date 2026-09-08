@@ -1,5 +1,5 @@
 // Implements actuator setup/commands, recursive descendant-physics overrides,
-// rate-limited drive targets, target hard stops, events, and freeze restoration.
+// drive targets/events, freeze restoration, and dependent-joint preservation.
 #include "MechanismActuatorComponent.h"
 
 #include "Components/PrimitiveComponent.h"
@@ -7,8 +7,29 @@
 #include "GameFramework/Actor.h"
 #include "PhysicsEngine/BodyInstance.h"
 #include "PhysicsEngine/ConstraintInstance.h"
+#include "TimerManager.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogMechanismActuator, Log, All);
+
+namespace
+{
+    const TCHAR* GetMechanismActuatorModeName(const EMechanismActuatorMode Mode)
+    {
+        switch (Mode)
+        {
+            case EMechanismActuatorMode::LinearPosition:
+                return TEXT("LinearPosition");
+            case EMechanismActuatorMode::AngularPosition:
+                return TEXT("AngularPosition");
+            case EMechanismActuatorMode::AngularVelocity:
+                return TEXT("AngularVelocity");
+            default:
+                return TEXT("Unknown");
+        }
+    }
+}
+
+#include "MechanismActuatorDiagnostics.inl"
 
 UMechanismActuatorComponent::UMechanismActuatorComponent(
     const FObjectInitializer& ObjectInitializer)
@@ -334,6 +355,16 @@ bool UMechanismActuatorComponent::InitializeActuator()
         return true;
     }
 
+    // A real simulated state is required for the existing freeze/thaw snapshot.
+    // Reject conflicting runtime settings rather than silently changing them.
+    if (bStartFrozen && !bChildSimulatePhysics)
+    {
+        UE_LOG(LogMechanismActuator, Error,
+            TEXT("[ActuatorDriven] Start Frozen requires Child Simulate Physics: Actuator='%s'."),
+            *GetPathName());
+        return false;
+    }
+
     bWaitingForLinearMotionStop = false;
     bWaitingForAngularTargetStop = false;
     bAngularTargetHardStopArmed = false;
@@ -367,24 +398,31 @@ bool UMechanismActuatorComponent::InitializeActuator()
     {
         Child->SetMobility(EComponentMobility::Movable);
     }
-    // Bind before applying the configured physics state so newly created Chaos
-    // bodies are created with sleep/wake notifications enabled.
-    BindMovingComponentEvents(Child);
-
-    // Apply the configured initial child state once per component lifecycle.
-    // The idempotent initialization guard prevents later duplicate calls from
-    // overriding gameplay changes to simulation or gravity.
-    Child->SetSimulatePhysics(bChildSimulatePhysics);
-    Child->SetEnableGravity(bChildEnableGravity);
-
-    if (!ConfigureConstraintForBodies(Parent, Child))
     {
-        UnbindMovingComponentEvents();
-        return false;
-    }
+        FPhysicsTransitionScope Transition(*this);
+        if (!Transition.bReady)
+        {
+            LogMechanismChainState(TEXT("Initialize.RejectedWeldedBody"));
+            return false;
+        }
+        // Bind before applying physics state so new bodies have notifications.
+        BindMovingComponentEvents(Child);
 
-    bActuatorInitialized = true;
-    SetComponentFrozen(false);
+        // The initialization guard keeps these overrides lifecycle-scoped.
+        LogMechanismChainState(TEXT("Initialize.BeforeSetSimulatePhysics"));
+        Child->SetSimulatePhysics(bChildSimulatePhysics);
+        LogMechanismChainState(TEXT("Initialize.AfterSetSimulatePhysics"));
+        Child->SetEnableGravity(bChildEnableGravity);
+
+        if (!ConfigureConstraintForBodies(Parent, Child))
+        {
+            UnbindMovingComponentEvents();
+            return false;
+        }
+
+        bActuatorInitialized = true;
+        SetComponentFrozen(false);
+    } // End internal physics transition before initial gameplay events.
     bLinearSpeedTargetInitialized = false;
     bAngularSpeedTargetInitialized = false;
     // Every actuator begins inactive. Gameplay must explicitly issue its first
@@ -393,6 +431,16 @@ bool UMechanismActuatorComponent::InitializeActuator()
     UpdateExposedStates();
     ApplyCurrentState();
     PrepareInitialLinearEnd();
+    if (bStartFrozen)
+    {
+        // Capture initialized frames/targets through the same protected path as
+        // gameplay freezing. Do not synthesize endpoint events or a frozen flag.
+        const bool bFrozenSuccessfully = FreezeComponentInternal();
+        UE_LOG(LogMechanismActuator, Log,
+            TEXT("[ActuatorDriven] Start Frozen completed: Actuator='%s', Success=%d, Frozen=%d."),
+            *GetPathName(), bFrozenSuccessfully, bComponentFrozen);
+        return bFrozenSuccessfully;
+    }
     return true;
 }
 
@@ -457,9 +505,48 @@ bool UMechanismActuatorComponent::ConfigureConstraintForBodies(
         return false;
     }
 
+    const FBodyInstance* ParentBodyBefore = Parent->GetBodyInstance(ParentBoneName, false);
+    const FBodyInstance* ChildBodyBefore = Child->GetBodyInstance(ChildBoneName, false);
+    // Joint endpoints must retain independent physics actors. An effective
+    // welded ancestor is not a substitute for the authored endpoint.
+    if (!ParentBodyBefore || !ChildBodyBefore
+        || !ParentBodyBefore->IsValidBodyInstance()
+        || !ChildBodyBefore->IsValidBodyInstance()
+        || ParentBodyBefore->WeldParent || ChildBodyBefore->WeldParent)
+    {
+        UE_LOG(LogMechanismActuator, Error,
+            TEXT("[ActuatorDriven] Constraint rebuild rejected: missing or welded endpoint. Actuator='%s', Parent='%s', Child='%s'."),
+            *GetPathName(), *GetPathNameSafe(Parent), *GetPathNameSafe(Child));
+        return false;
+    }
+    UE_LOG(LogMechanismActuator, Log,
+        TEXT("[ActuatorDriven] Constraint rebuild started: Actuator='%s', Mode=%s, Parent='%s', ParentBone='%s', ParentSimulating=%s, ParentPhysicsState=%s, ParentBodyValid=%s, Child='%s', ChildBone='%s', ChildSimulating=%s, ChildPhysicsState=%s, ChildBodyValid=%s, ConstraintValidBefore=%s, ConstraintTerminatedBefore=%s."),
+        *GetPathName(),
+        GetMechanismActuatorModeName(Mode),
+        *GetPathNameSafe(Parent),
+        *ParentBoneName.ToString(),
+        Parent->IsSimulatingPhysics(ParentBoneName) ? TEXT("true") : TEXT("false"),
+        Parent->IsPhysicsStateCreated() ? TEXT("created") : TEXT("missing"),
+        ParentBodyBefore && ParentBodyBefore->IsValidBodyInstance() ? TEXT("true") : TEXT("false"),
+        *GetPathNameSafe(Child),
+        *ChildBoneName.ToString(),
+        Child->IsSimulatingPhysics(ChildBoneName) ? TEXT("true") : TEXT("false"),
+        Child->IsPhysicsStateCreated() ? TEXT("created") : TEXT("missing"),
+        ChildBodyBefore && ChildBodyBefore->IsValidBodyInstance() ? TEXT("true") : TEXT("false"),
+        ConstraintInstance.IsValidConstraintInstance() ? TEXT("true") : TEXT("false"),
+        ConstraintInstance.IsTerminated() ? TEXT("true") : TEXT("false"));
+
     // The constraint component transform supplies the joint frame. Rebuilding
     // here also refreshes body handles after SetSimulatePhysics recreated them.
     SetConstrainedComponents(Parent, ParentBoneName, Child, ChildBoneName);
+
+    UE_LOG(LogMechanismActuator, Log,
+        TEXT("[ActuatorDriven] SetConstrainedComponents completed: Actuator='%s', Parent='%s', Child='%s', ConstraintValid=%s, ConstraintTerminated=%s."),
+        *GetPathName(),
+        *GetPathNameSafe(Parent),
+        *GetPathNameSafe(Child),
+        ConstraintInstance.IsValidConstraintInstance() ? TEXT("true") : TEXT("false"),
+        ConstraintInstance.IsTerminated() ? TEXT("true") : TEXT("false"));
     ConfigureCommonConstraint();
 
     switch (Mode)
@@ -479,7 +566,247 @@ bool UMechanismActuatorComponent::ConfigureConstraintForBodies(
             return false;
     }
 
-    return true;
+    const FBodyInstance* ParentBodyAfter = Parent->GetBodyInstance(ParentBoneName, false);
+    const FBodyInstance* ChildBodyAfter = Child->GetBodyInstance(ChildBoneName, false);
+    const bool bConstraintReady = ConstraintInstance.IsValidConstraintInstance()
+        && !ConstraintInstance.IsTerminated();
+    UE_LOG(LogMechanismActuator, Log,
+        TEXT("[ActuatorDriven] Constraint rebuild completed: Actuator='%s', Mode=%s, Parent='%s', ParentBodyValid=%s, Child='%s', ChildBodyValid=%s, ChildSimulating=%s, ConstraintValid=%s, ConstraintTerminated=%s, DiagnosticResult=%s."),
+        *GetPathName(),
+        GetMechanismActuatorModeName(Mode),
+        *GetPathNameSafe(Parent),
+        ParentBodyAfter && ParentBodyAfter->IsValidBodyInstance() ? TEXT("true") : TEXT("false"),
+        *GetPathNameSafe(Child),
+        ChildBodyAfter && ChildBodyAfter->IsValidBodyInstance() ? TEXT("true") : TEXT("false"),
+        Child->IsSimulatingPhysics(ChildBoneName) ? TEXT("true") : TEXT("false"),
+        ConstraintInstance.IsValidConstraintInstance() ? TEXT("true") : TEXT("false"),
+        ConstraintInstance.IsTerminated() ? TEXT("true") : TEXT("false"),
+        bConstraintReady ? TEXT("Ready") : TEXT("Failed"));
+    if (!bConstraintReady)
+    {
+        UE_LOG(LogMechanismActuator, Error,
+            TEXT("[ActuatorDriven] Constraint rebuild failed: Actuator='%s', Parent='%s', Child='%s'."),
+            *GetPathName(), *GetPathNameSafe(Parent), *GetPathNameSafe(Child));
+    }
+
+    return bConstraintReady;
+}
+
+void UMechanismActuatorComponent::CaptureDependentConstraintSnapshots(
+    UPrimitiveComponent* RecreatedBody,
+    TArray<FDependentConstraintSnapshot>& OutSnapshots) const
+{
+    OutSnapshots.Reset();
+    AActor* OwningActor = GetOwner();
+    if (!IsValid(OwningActor) || !IsValid(RecreatedBody))
+    {
+        return;
+    }
+
+    TInlineComponentArray<UMechanismActuatorComponent*> Actuators;
+    OwningActor->GetComponents(Actuators);
+    for (UMechanismActuatorComponent* DependentActuator : Actuators)
+    {
+        if (!IsValid(DependentActuator)
+            || DependentActuator == this
+            || !DependentActuator->bActuatorInitialized
+            || DependentActuator->bComponentFrozen)
+        {
+            continue;
+        }
+
+        UPrimitiveComponent* DependentParent =
+            DependentActuator->GetParentComponent();
+        UPrimitiveComponent* DependentChild =
+            DependentActuator->GetMovingComponent();
+        // Frozen intermediary bodies remain in the attachment subtree, even
+        // though their own actuator has no live joint. Include joints touching
+        // those bodies without thawing or rebuilding the frozen actuator.
+        const bool bParentAffected = IsValid(DependentParent)
+            && (DependentParent == RecreatedBody || DependentParent->IsAttachedTo(RecreatedBody));
+        const bool bChildAffected = IsValid(DependentChild)
+            && (DependentChild == RecreatedBody || DependentChild->IsAttachedTo(RecreatedBody));
+        if (!bParentAffected && !bChildAffected)
+        {
+            continue;
+        }
+
+        if (!DependentActuator->ConstraintInstance.IsValidConstraintInstance()
+            || DependentActuator->ConstraintInstance.IsTerminated())
+        {
+            UE_LOG(LogMechanismActuator, Warning,
+                TEXT("[ActuatorDriven] Dependent constraint could not be preserved because it was already invalid: SourceActuator='%s', RecreatedBody='%s', DependentActuator='%s', Parent='%s', Child='%s', ConstraintValid=%s, ConstraintTerminated=%s."),
+                *GetPathName(),
+                *GetPathNameSafe(RecreatedBody),
+                *GetPathNameSafe(DependentActuator),
+                *GetPathNameSafe(DependentParent),
+                *GetPathNameSafe(DependentChild),
+                DependentActuator->ConstraintInstance.IsValidConstraintInstance()
+                    ? TEXT("true") : TEXT("false"),
+                DependentActuator->ConstraintInstance.IsTerminated()
+                    ? TEXT("true") : TEXT("false"));
+            continue;
+        }
+
+        FDependentConstraintSnapshot& Snapshot = OutSnapshots.AddDefaulted_GetRef();
+        Snapshot.Actuator = DependentActuator;
+        Snapshot.Parent = DependentParent;
+        Snapshot.Child = DependentChild;
+        Snapshot.Frame1 = DependentActuator->ConstraintInstance.GetRefFrame(
+            EConstraintFrame::Frame1);
+        Snapshot.Frame2 = DependentActuator->ConstraintInstance.GetRefFrame(
+            EConstraintFrame::Frame2);
+        Snapshot.LinearPositionTarget =
+            DependentActuator->ConstraintInstance.GetLinearPositionTarget();
+        Snapshot.LinearVelocityTarget =
+            DependentActuator->ConstraintInstance.GetLinearVelocityTarget();
+        Snapshot.AngularOrientationTarget =
+            DependentActuator->ConstraintInstance.GetAngularOrientationTarget();
+        Snapshot.AngularVelocityTarget =
+            DependentActuator->ConstraintInstance.GetAngularVelocityTarget();
+        Snapshot.bChildWasAwake = IsValid(DependentChild)
+            && DependentChild->IsAnyRigidBodyAwake();
+
+        UE_LOG(LogMechanismActuator, Log,
+            TEXT("[ActuatorDriven] Dependent constraint snapshot captured: SourceActuator='%s', RecreatedBody='%s', DependentActuator='%s', Mode=%s, Parent='%s', Child='%s', ChildWasAwake=%s."),
+            *GetPathName(),
+            *GetPathNameSafe(RecreatedBody),
+            *GetPathNameSafe(DependentActuator),
+            GetMechanismActuatorModeName(DependentActuator->Mode),
+            *GetPathNameSafe(DependentParent),
+            *GetPathNameSafe(DependentChild),
+            Snapshot.bChildWasAwake ? TEXT("true") : TEXT("false"));
+    }
+}
+
+bool UMechanismActuatorComponent::RestoreDependentConstraintSnapshots(
+    UPrimitiveComponent* RecreatedBody,
+    const TArray<FDependentConstraintSnapshot>& Snapshots)
+{
+    bool bAllRestored = true;
+    for (const FDependentConstraintSnapshot& Snapshot : Snapshots)
+    {
+        UMechanismActuatorComponent* DependentActuator = Snapshot.Actuator.Get();
+        if (!IsValid(DependentActuator))
+        {
+            bAllRestored = false;
+            continue;
+        }
+        if (DependentActuator->bComponentFrozen)
+        {
+            UE_LOG(LogMechanismActuator, Log,
+                TEXT("[ActuatorDriven] Dependent constraint restore skipped because the actuator became frozen: SourceActuator='%s', RecreatedBody='%s', DependentActuator='%s'."),
+                *GetPathName(),
+                *GetPathNameSafe(RecreatedBody),
+                *GetPathNameSafe(DependentActuator));
+            continue;
+        }
+
+        UPrimitiveComponent* DependentParent =
+            DependentActuator->GetParentComponent();
+        UPrimitiveComponent* DependentChild =
+            DependentActuator->GetMovingComponent();
+        if (!IsValid(DependentParent)
+            || !IsValid(DependentChild)
+            || DependentParent != Snapshot.Parent.Get()
+            || DependentChild != Snapshot.Child.Get())
+        {
+            bAllRestored = false;
+            UE_LOG(LogMechanismActuator, Warning,
+                TEXT("[ActuatorDriven] Dependent constraint restore skipped because its body references changed: SourceActuator='%s', RecreatedBody='%s', DependentActuator='%s', Parent='%s', Child='%s'."),
+                *GetPathName(),
+                *GetPathNameSafe(RecreatedBody),
+                *GetPathNameSafe(DependentActuator),
+                *GetPathNameSafe(DependentParent),
+                *GetPathNameSafe(DependentChild));
+            continue;
+        }
+
+        const bool bConfigured = DependentActuator->ConfigureConstraintForBodies(
+            DependentParent, DependentChild);
+        const bool bConstraintReady = bConfigured
+            && DependentActuator->ConstraintInstance.IsValidConstraintInstance()
+            && !DependentActuator->ConstraintInstance.IsTerminated();
+        if (!bConstraintReady)
+        {
+            bAllRestored = false;
+            DependentActuator->bActuatorInitialized = false;
+            UE_LOG(LogMechanismActuator, Error,
+                TEXT("[ActuatorDriven] Dependent constraint restore failed: SourceActuator='%s', RecreatedBody='%s', DependentActuator='%s', Parent='%s', Child='%s', Configured=%s, ConstraintValid=%s, ConstraintTerminated=%s."),
+                *GetPathName(),
+                *GetPathNameSafe(RecreatedBody),
+                *GetPathNameSafe(DependentActuator),
+                *GetPathNameSafe(DependentParent),
+                *GetPathNameSafe(DependentChild),
+                bConfigured ? TEXT("true") : TEXT("false"),
+                DependentActuator->ConstraintInstance.IsValidConstraintInstance()
+                    ? TEXT("true") : TEXT("false"),
+                DependentActuator->ConstraintInstance.IsTerminated()
+                    ? TEXT("true") : TEXT("false"));
+
+            // A downstream Child must not remain as a free rigid body when its
+            // Parent body was recreated but its joint could not be restored.
+            // Fall back to the existing reversible frozen attachment state.
+            if ((DependentParent == RecreatedBody || DependentParent->IsAttachedTo(RecreatedBody))
+                && DependentChild->IsSimulatingPhysics())
+            {
+                const bool bFallbackFrozen =
+                    DependentActuator->FreezeComponentInternal();
+                UE_LOG(LogMechanismActuator, Log,
+                    TEXT("[ActuatorDriven] Dependent constraint restore fallback: SourceActuator='%s', DependentActuator='%s', Child='%s', FreezeFallback=%s."),
+                    *GetPathName(),
+                    *GetPathNameSafe(DependentActuator),
+                    *GetPathNameSafe(DependentChild),
+                    bFallbackFrozen ? TEXT("Succeeded") : TEXT("Failed"));
+                if (!bFallbackFrozen)
+                {
+                    UE_LOG(LogMechanismActuator, Error,
+                        TEXT("[ActuatorDriven] Dependent constraint restore fallback failed: SourceActuator='%s', DependentActuator='%s', Child='%s'."),
+                        *GetPathName(),
+                        *GetPathNameSafe(DependentActuator),
+                        *GetPathNameSafe(DependentChild));
+                }
+            }
+            continue;
+        }
+
+        DependentActuator->SetConstraintReferenceFrame(
+            EConstraintFrame::Frame1, Snapshot.Frame1);
+        DependentActuator->SetConstraintReferenceFrame(
+            EConstraintFrame::Frame2, Snapshot.Frame2);
+        DependentActuator->SetLinearPositionTarget(
+            Snapshot.LinearPositionTarget);
+        DependentActuator->SetLinearVelocityTarget(
+            Snapshot.LinearVelocityTarget);
+        DependentActuator->SetAngularOrientationTarget(
+            Snapshot.AngularOrientationTarget);
+        DependentActuator->SetAngularVelocityTarget(
+            Snapshot.AngularVelocityTarget);
+        DependentActuator->bActuatorInitialized = true;
+        if (Snapshot.bChildWasAwake)
+        {
+            DependentActuator->WakeChild();
+        }
+        else
+        {
+            DependentChild->PutAllRigidBodiesToSleep();
+        }
+
+        UE_LOG(LogMechanismActuator, Log,
+            TEXT("[ActuatorDriven] Dependent constraint restored after body recreation: SourceActuator='%s', RecreatedBody='%s', DependentActuator='%s', Mode=%s, Parent='%s', Child='%s', RestoredAwake=%s, ConstraintValid=%s, ConstraintTerminated=%s."),
+            *GetPathName(),
+            *GetPathNameSafe(RecreatedBody),
+            *GetPathNameSafe(DependentActuator),
+            GetMechanismActuatorModeName(DependentActuator->Mode),
+            *GetPathNameSafe(DependentParent),
+            *GetPathNameSafe(DependentChild),
+            Snapshot.bChildWasAwake ? TEXT("true") : TEXT("false"),
+            DependentActuator->ConstraintInstance.IsValidConstraintInstance()
+                ? TEXT("true") : TEXT("false"),
+            DependentActuator->ConstraintInstance.IsTerminated()
+                ? TEXT("true") : TEXT("false"));
+    }
+    return bAllRestored;
 }
 
 void UMechanismActuatorComponent::ConfigureCommonConstraint()
@@ -864,15 +1191,35 @@ void UMechanismActuatorComponent::CompleteAngularPositionMotion(
         return;
     }
 
+    const uint64 CompletedCommand = MotionCommandRevision;
     bWaitingForAngularTargetStop = false;
     bAngularTargetHardStopArmed = false;
+    UE_LOG(LogMechanismActuator, Log,
+        TEXT("[ActuatorDriven] Angular endpoint reached: Actuator='%s', Child='%s', Bone='%s', CommandedState=%s, CurrentAngle=%.3f, PhysicalTarget=%.3f, ForceFreeze=%s, FreezeOnRotationStopped=%s. Broadcasting endpoint events before freeze."),
+        *GetPathName(),
+        *GetPathNameSafe(MovingComponent),
+        *BoneName.ToString(),
+        AngularPositionState == EMechanismAngularPositionState::Open ? TEXT("Open") : TEXT("Closed"),
+        GetCurrentAngularPositionDegrees(),
+        GetPhysicalAngularTargetDegrees(),
+        bForceFreeze ? TEXT("true") : TEXT("false"),
+        bFreezeOnRotationStopped ? TEXT("true") : TEXT("false"));
     ReceiveRotateToEnd(MovingComponent, BoneName);
     OnRotateToEnd.Broadcast(MovingComponent, BoneName);
     ReceiveRotateToTarget(MovingComponent, BoneName);
     OnRotateToTarget.Broadcast(MovingComponent, BoneName);
 
+    // Endpoint listeners may issue a new target. Never freeze that new motion
+    // as the completion side effect of the command that just ended.
+    if (CompletedCommand != MotionCommandRevision)
+    {
+        return;
+    }
     if (bForceFreeze || bFreezeOnRotationStopped)
     {
+        UE_LOG(LogMechanismActuator, Log,
+            TEXT("[ActuatorDriven] Angular endpoint events completed; entering freeze: Actuator='%s', Child='%s'."),
+            *GetPathName(), *GetPathNameSafe(MovingComponent));
         FreezeComponentInternal();
     }
     else
@@ -904,7 +1251,8 @@ void UMechanismActuatorComponent::PrepareInitialLinearEnd()
 void UMechanismActuatorComponent::HandleMovingComponentSleep(
     UPrimitiveComponent* SleepingComponent, const FName BoneName)
 {
-    if (SleepingComponent != BoundSleepComponent.Get()
+    if (PhysicsTransitionDepth > 0
+        || SleepingComponent != BoundSleepComponent.Get()
         || (ChildBoneName != NAME_None
             && BoneName != NAME_None
             && BoneName != ChildBoneName))
@@ -933,6 +1281,7 @@ void UMechanismActuatorComponent::HandleMovingComponentSleep(
     bHasReachedLinearEnd = true;
     RefreshLinearSpeedTick();
 
+    const uint64 CompletedCommand = MotionCommandRevision;
     bool bFreezeAtReachedEnd = false;
     if (ReachedLinearEnd == EMechanismLinearState::Extended)
     {
@@ -947,10 +1296,21 @@ void UMechanismActuatorComponent::HandleMovingComponentSleep(
         bFreezeAtReachedEnd = bFreezeOnRetractToEnd;
     }
 
+    if (bLogFrequentActuatorDrivenEvents)
+    {
+        UE_LOG(LogMechanismActuator, Log,
+            TEXT("[ActuatorDriven] Linear endpoint events completed: Actuator='%s', Child='%s', Bone='%s', ReachedEnd=%s, FreezeAtReachedEnd=%s."),
+            *GetPathName(),
+            *GetPathNameSafe(SleepingComponent),
+            *BoneName.ToString(),
+            ReachedLinearEnd == EMechanismLinearState::Extended ? TEXT("Extended") : TEXT("Retracted"),
+            bFreezeAtReachedEnd ? TEXT("true") : TEXT("false"));
+    }
+
     // Send both forms of the To End event before replacing the rigid body with
     // the frozen Keep World attachment. FreezeComponentInternal is idempotent
     // if an event receiver already froze the same moving component.
-    if (bFreezeAtReachedEnd)
+    if (bFreezeAtReachedEnd && CompletedCommand == MotionCommandRevision)
     {
         FreezeComponentInternal();
     }
@@ -959,7 +1319,8 @@ void UMechanismActuatorComponent::HandleMovingComponentSleep(
 void UMechanismActuatorComponent::HandleMovingComponentWake(
     UPrimitiveComponent* WakingComponent, const FName BoneName)
 {
-    if (!bHasReachedLinearEnd
+    if (PhysicsTransitionDepth > 0
+        || !bHasReachedLinearEnd
         || bLinearEndWakeSuppressedUntilCommand
         || WakingComponent != BoundSleepComponent.Get()
         || (ChildBoneName != NAME_None
@@ -971,6 +1332,19 @@ void UMechanismActuatorComponent::HandleMovingComponentWake(
 
     const EMechanismLinearState LeftEnd = ReachedLinearEnd;
     bHasReachedLinearEnd = false;
+
+    if (bLogLinearEndLeftEvents)
+    {
+        UE_LOG(LogMechanismActuator, Log,
+            TEXT("[ActuatorDriven] Linear end left; broadcasting leave event: Actuator='%s', Child='%s', Bone='%s', LeftEnd=%s, Frozen=%s, ConstraintValid=%s, ConstraintTerminated=%s."),
+            *GetPathName(),
+            *GetPathNameSafe(WakingComponent),
+            *BoneName.ToString(),
+            LeftEnd == EMechanismLinearState::Extended ? TEXT("Extended") : TEXT("Retracted"),
+            bComponentFrozen ? TEXT("true") : TEXT("false"),
+            ConstraintInstance.IsValidConstraintInstance() ? TEXT("true") : TEXT("false"),
+            ConstraintInstance.IsTerminated() ? TEXT("true") : TEXT("false"));
+    }
 
     // A released obstruction can let the existing drive continue without a
     // new command. Re-arm here so the next sleep reports reaching the end again.
@@ -1222,6 +1596,16 @@ void UMechanismActuatorComponent::ApplyCurrentState()
 
 void UMechanismActuatorComponent::SetActuatorActive(const bool bActive)
 {
+    ++MotionCommandRevision;
+    UE_LOG(LogMechanismActuator, Log,
+        TEXT("[ActuatorDriven] Position command received: Actuator='%s', Mode=%s, RequestedActive=%s, PreviousActive=%s, Frozen=%s, ConstraintValid=%s, ConstraintTerminated=%s."),
+        *GetPathName(),
+        GetMechanismActuatorModeName(Mode),
+        bActive ? TEXT("true") : TEXT("false"),
+        bActuatorActive ? TEXT("true") : TEXT("false"),
+        bComponentFrozen ? TEXT("true") : TEXT("false"),
+        ConstraintInstance.IsValidConstraintInstance() ? TEXT("true") : TEXT("false"),
+        ConstraintInstance.IsTerminated() ? TEXT("true") : TEXT("false"));
     const bool bUsesPositionTarget =
         Mode == EMechanismActuatorMode::LinearPosition
         || Mode == EMechanismActuatorMode::AngularPosition;
@@ -1263,6 +1647,14 @@ void UMechanismActuatorComponent::SetActuatorActive(const bool bActive)
     if (Mode == EMechanismActuatorMode::AngularPosition)
     {
         ArmAngularTargetHardStop();
+        UE_LOG(LogMechanismActuator, Log,
+            TEXT("[ActuatorDriven] Angular command applied; broadcasting StartRotating: Actuator='%s', Child='%s', State=%s, Frozen=%s, ConstraintValid=%s, ConstraintTerminated=%s."),
+            *GetPathName(),
+            *GetPathNameSafe(GetMovingComponent()),
+            AngularPositionState == EMechanismAngularPositionState::Open ? TEXT("Open") : TEXT("Closed"),
+            bComponentFrozen ? TEXT("true") : TEXT("false"),
+            ConstraintInstance.IsValidConstraintInstance() ? TEXT("true") : TEXT("false"),
+            ConstraintInstance.IsTerminated() ? TEXT("true") : TEXT("false"));
         BroadcastStartRotating();
     }
 
@@ -1296,6 +1688,18 @@ void UMechanismActuatorComponent::Close()
 
 void UMechanismActuatorComponent::SetPositionAlpha(float Alpha)
 {
+    ++MotionCommandRevision;
+    if (bLogFrequentActuatorDrivenEvents)
+    {
+        UE_LOG(LogMechanismActuator, Log,
+            TEXT("[ActuatorDriven] Position alpha command received: Actuator='%s', Mode=%s, RequestedAlpha=%.4f, Frozen=%s, ConstraintValid=%s, ConstraintTerminated=%s."),
+            *GetPathName(),
+            GetMechanismActuatorModeName(Mode),
+            Alpha,
+            bComponentFrozen ? TEXT("true") : TEXT("false"),
+            ConstraintInstance.IsValidConstraintInstance() ? TEXT("true") : TEXT("false"),
+            ConstraintInstance.IsTerminated() ? TEXT("true") : TEXT("false"));
+    }
     const bool bUsesPositionTarget =
         Mode == EMechanismActuatorMode::LinearPosition
         || Mode == EMechanismActuatorMode::AngularPosition;
@@ -1347,6 +1751,15 @@ void UMechanismActuatorComponent::SetPositionAlpha(float Alpha)
 
         bActuatorActive = Alpha >= 0.5f;
         UpdateExposedStates();
+        UE_LOG(LogMechanismActuator, Log,
+            TEXT("[ActuatorDriven] Angular position alpha applied; broadcasting StartRotating: Actuator='%s', Child='%s', Alpha=%.4f, State=%s, Frozen=%s, ConstraintValid=%s, ConstraintTerminated=%s."),
+            *GetPathName(),
+            *GetPathNameSafe(GetMovingComponent()),
+            Alpha,
+            AngularPositionState == EMechanismAngularPositionState::Open ? TEXT("Open") : TEXT("Closed"),
+            bComponentFrozen ? TEXT("true") : TEXT("false"),
+            ConstraintInstance.IsValidConstraintInstance() ? TEXT("true") : TEXT("false"),
+            ConstraintInstance.IsTerminated() ? TEXT("true") : TEXT("false"));
         BroadcastStartRotating();
     }
     else
@@ -1460,6 +1873,9 @@ bool UMechanismActuatorComponent::FreezeComponentInternal()
 {
     if (bComponentFrozen)
     {
+        UE_LOG(LogMechanismActuator, Log,
+            TEXT("[ActuatorDriven] Freeze skipped because actuator is already frozen: Actuator='%s'."),
+            *GetPathName());
         return true;
     }
 
@@ -1480,6 +1896,28 @@ bool UMechanismActuatorComponent::FreezeComponentInternal()
             *GetPathName(), *Child->GetName());
         return false;
     }
+
+    const FBodyInstance* ChildBodyBeforeFreeze =
+        Child->GetBodyInstance(ChildBoneName, false);
+    FPhysicsTransitionScope Transition(*this);
+    if (!Transition.bReady)
+    {
+        LogMechanismChainState(TEXT("Freeze.RejectedWeldedBody"));
+        return false;
+    }
+    UE_LOG(LogMechanismActuator, Log,
+        TEXT("[ActuatorDriven] Freeze started: Actuator='%s', Mode=%s, Parent='%s', Child='%s', ChildAttachParent='%s', ChildSimulating=%s, ChildPhysicsState=%s, ChildBodyValid=%s, Gravity=%s, ConstraintValid=%s, ConstraintTerminated=%s."),
+        *GetPathName(),
+        GetMechanismActuatorModeName(Mode),
+        *GetPathNameSafe(Parent),
+        *GetPathNameSafe(Child),
+        *GetPathNameSafe(Child->GetAttachParent()),
+        Child->IsSimulatingPhysics(ChildBoneName) ? TEXT("true") : TEXT("false"),
+        Child->IsPhysicsStateCreated() ? TEXT("created") : TEXT("missing"),
+        ChildBodyBeforeFreeze && ChildBodyBeforeFreeze->IsValidBodyInstance() ? TEXT("true") : TEXT("false"),
+        Child->IsGravityEnabled() ? TEXT("true") : TEXT("false"),
+        ConstraintInstance.IsValidConstraintInstance() ? TEXT("true") : TEXT("false"),
+        ConstraintInstance.IsTerminated() ? TEXT("true") : TEXT("false"));
 
     // Preserve a reported end across Freeze/Unfreeze, but suppress the sleep
     // and wake callbacks caused by recreating physics. The next real command
@@ -1520,6 +1958,33 @@ bool UMechanismActuatorComponent::FreezeComponentInternal()
         }
     }
 
+    UE_LOG(LogMechanismActuator, Log,
+        TEXT("[ActuatorDriven] Freeze state captured: Actuator='%s', SavedConstraintState=%s, SavedChildSimulating=%s, SavedGravity=%s, SavedWakeEvents=%s."),
+        *GetPathName(),
+        bHasSavedConstraintState ? TEXT("true") : TEXT("false"),
+        Child->IsSimulatingPhysics() ? TEXT("true") : TEXT("false"),
+        Child->IsGravityEnabled() ? TEXT("true") : TEXT("false"),
+        Child->BodyInstance.bGenerateWakeEvents ? TEXT("true") : TEXT("false"));
+    UE_LOG(LogMechanismActuator, Log,
+        TEXT("[ActuatorDriven] Freeze pose and velocity captured: Actuator='%s', ChildLocation=%s, ChildRotation=%s, LinearVelocity=%s, AngularVelocityDeg=%s."),
+        *GetPathName(),
+        *Child->GetComponentLocation().ToCompactString(),
+        *Child->GetComponentRotation().ToCompactString(),
+        *Child->GetPhysicsLinearVelocity(ChildBoneName).ToCompactString(),
+        *Child->GetPhysicsAngularVelocityInDegrees(ChildBoneName).ToCompactString());
+    if (bHasSavedConstraintState)
+    {
+        UE_LOG(LogMechanismActuator, Log,
+            TEXT("[ActuatorDriven] Constraint snapshot captured: Actuator='%s', Frame1Location=%s, Frame1Rotation=%s, Frame2Location=%s, Frame2Rotation=%s, LinearTarget=%s, AngularTarget=%s."),
+            *GetPathName(),
+            *SavedConstraintFrame1.GetLocation().ToCompactString(),
+            *SavedConstraintFrame1.GetRotation().Rotator().ToCompactString(),
+            *SavedConstraintFrame2.GetLocation().ToCompactString(),
+            *SavedConstraintFrame2.GetRotation().Rotator().ToCompactString(),
+            *SavedLinearPositionTarget.ToCompactString(),
+            *SavedAngularOrientationTarget.ToCompactString());
+    }
+
     FTransform SleepWorldTransform = Child->GetComponentTransform();
     const FVector SleepWorldScale = SleepWorldTransform.GetScale3D();
     if (FBodyInstance* ChildBody = Child->GetBodyInstance(ChildBoneName);
@@ -1539,11 +2004,33 @@ bool UMechanismActuatorComponent::FreezeComponentInternal()
     SetComponentFrozen(true);
     SetComponentTickEnabled(false);
 
-    // Disable notifications before destroying the rigid body. Breaking the
-    // constraint afterwards cannot wake a body that no longer simulates.
+    TArray<FDependentConstraintSnapshot> DependentConstraintSnapshots;
+    CaptureDependentConstraintSnapshots(Child, DependentConstraintSnapshots);
+
+    // Disable notifications before switching the body to kinematic. Toggling
+    // simulation alone does not imply destruction of its physics actor.
     Child->BodyInstance.bGenerateWakeEvents = false;
+    LogMechanismChainState(TEXT("Freeze.BeforeSetSimulatePhysics"));
     Child->SetSimulatePhysics(false);
+    LogMechanismChainState(TEXT("Freeze.AfterSetSimulatePhysics"));
+    UE_LOG(LogMechanismActuator, Log,
+        TEXT("[ActuatorDriven] Child physics disabled before constraint break: Actuator='%s', Child='%s', Simulating=%s, PhysicsState=%s, ConstraintValid=%s, ConstraintTerminated=%s."),
+        *GetPathName(),
+        *GetPathNameSafe(Child),
+        Child->IsSimulatingPhysics(ChildBoneName) ? TEXT("true") : TEXT("false"),
+        Child->IsPhysicsStateCreated() ? TEXT("created") : TEXT("missing"),
+        ConstraintInstance.IsValidConstraintInstance() ? TEXT("true") : TEXT("false"),
+        ConstraintInstance.IsTerminated() ? TEXT("true") : TEXT("false"));
+    LogMechanismChainState(TEXT("Freeze.BeforeBreakConstraint"));
     BreakConstraint();
+    LogMechanismChainState(TEXT("Freeze.AfterBreakConstraint"));
+    UE_LOG(LogMechanismActuator, Log,
+        TEXT("[ActuatorDriven] BreakConstraint completed: Actuator='%s', Parent='%s', Child='%s', ConstraintValid=%s, ConstraintTerminated=%s."),
+        *GetPathName(),
+        *GetPathNameSafe(Parent),
+        *GetPathNameSafe(Child),
+        ConstraintInstance.IsValidConstraintInstance() ? TEXT("true") : TEXT("false"),
+        ConstraintInstance.IsTerminated() ? TEXT("true") : TEXT("false"));
 
     // SetSimulatePhysics(false) does not restore the attachment that Unreal
     // removed when simulation was enabled. Keep World preserves the solved pose.
@@ -1582,10 +2069,18 @@ bool UMechanismActuatorComponent::FreezeComponentInternal()
             NAME_None);
     }
 
+    LogMechanismChainState(TEXT("Freeze.AfterAttachment"));
     // A frozen component must never be allowed to become dynamic,
     // including when another plugin command ran during the attachment update.
     Child->BodyInstance.bGenerateWakeEvents = false;
     Child->SetSimulatePhysics(false);
+
+    // Restore captured joints only after the final attachment state is stable.
+    // Simulation toggles do not necessarily recreate bodies; topology changes
+    // can nevertheless affect joints belonging to attached descendants.
+    LogMechanismChainState(TEXT("Freeze.BeforeDependencyRestore"));
+    const bool bDependenciesRestored = RestoreDependentConstraintSnapshots(Child, DependentConstraintSnapshots);
+    LogMechanismChainState(TEXT("Freeze.AfterAttachmentAndDependencyRestore"));
 
     if (!bAttached || Child->GetAttachParent() != Parent)
     {
@@ -1603,7 +2098,7 @@ bool UMechanismActuatorComponent::FreezeComponentInternal()
         Child->IsSimulatingPhysics() ? TEXT("true") : TEXT("false"),
         Child->GetAttachParent() == Parent ? TEXT("true") : TEXT("false"));
 
-    return true;
+    return bDependenciesRestored;
 }
 
 void UMechanismActuatorComponent::UnfreezeComponent()
@@ -1631,28 +2126,92 @@ bool UMechanismActuatorComponent::UnfreezeComponentInternal()
         return false;
     }
 
-    // Detach before recreating the rigid body. Keep World means the mechanism
+    UE_LOG(LogMechanismActuator, Log,
+        TEXT("[ActuatorDriven] Unfreeze started: Actuator='%s', Mode=%s, Parent='%s', Child='%s', ChildAttachParent='%s', ChildSimulating=%s, SavedChildSimulating=%s, SavedConstraintState=%s, ConstraintValid=%s, ConstraintTerminated=%s."),
+        *GetPathName(),
+        GetMechanismActuatorModeName(Mode),
+        *GetPathNameSafe(Parent),
+        *GetPathNameSafe(Child),
+        *GetPathNameSafe(Child->GetAttachParent()),
+        Child->IsSimulatingPhysics(ChildBoneName) ? TEXT("true") : TEXT("false"),
+        bSavedChildSimulatePhysics ? TEXT("true") : TEXT("false"),
+        bHasSavedConstraintState ? TEXT("true") : TEXT("false"),
+        ConstraintInstance.IsValidConstraintInstance() ? TEXT("true") : TEXT("false"),
+        ConstraintInstance.IsTerminated() ? TEXT("true") : TEXT("false"));
+
+    FPhysicsTransitionScope Transition(*this);
+    if (!Transition.bReady)
+    {
+        LogMechanismChainState(TEXT("Unfreeze.RejectedWeldedBody"));
+        return false;
+    }
+    TArray<FDependentConstraintSnapshot> DependentConstraintSnapshots;
+    CaptureDependentConstraintSnapshots(Child, DependentConstraintSnapshots);
+
+    LogMechanismChainState(TEXT("Unfreeze.BeforeDetach"));
+    // Detach before enabling simulation. Keep World means the mechanism
     // resumes from the exact pose reached while it followed the parent.
     Child->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
+    LogMechanismChainState(TEXT("Unfreeze.AfterDetach"));
     Child->BodyInstance.bGenerateWakeEvents = bSavedGenerateWakeEvents;
+    LogMechanismChainState(TEXT("Unfreeze.BeforeSetSimulatePhysics"));
     Child->SetSimulatePhysics(bSavedChildSimulatePhysics);
+    LogMechanismChainState(TEXT("Unfreeze.AfterSetSimulatePhysics"));
     Child->SetEnableGravity(bSavedChildEnableGravity);
     SetComponentFrozen(false);
 
+    const FBodyInstance* RestoredChildBody =
+        Child->GetBodyInstance(ChildBoneName, false);
+    UE_LOG(LogMechanismActuator, Log,
+        TEXT("[ActuatorDriven] Child rigid body restored before constraint rebuild: Actuator='%s', Child='%s', AttachParent='%s', Simulating=%s, PhysicsState=%s, BodyValid=%s, Gravity=%s, Frozen=%s."),
+        *GetPathName(),
+        *GetPathNameSafe(Child),
+        *GetPathNameSafe(Child->GetAttachParent()),
+        Child->IsSimulatingPhysics(ChildBoneName) ? TEXT("true") : TEXT("false"),
+        Child->IsPhysicsStateCreated() ? TEXT("created") : TEXT("missing"),
+        RestoredChildBody && RestoredChildBody->IsValidBodyInstance() ? TEXT("true") : TEXT("false"),
+        Child->IsGravityEnabled() ? TEXT("true") : TEXT("false"),
+        bComponentFrozen ? TEXT("true") : TEXT("false"));
+    UE_LOG(LogMechanismActuator, Log,
+        TEXT("[ActuatorDriven] Unfreeze pose before constraint rebuild: Actuator='%s', ChildLocation=%s, ChildRotation=%s, LinearVelocity=%s, AngularVelocityDeg=%s."),
+        *GetPathName(),
+        *Child->GetComponentLocation().ToCompactString(),
+        *Child->GetComponentRotation().ToCompactString(),
+        *Child->GetPhysicsLinearVelocity(ChildBoneName).ToCompactString(),
+        *Child->GetPhysicsAngularVelocityInDegrees(ChildBoneName).ToCompactString());
+
     if (!bSavedChildSimulatePhysics)
     {
+        const bool bDependenciesRestored = RestoreDependentConstraintSnapshots(Child, DependentConstraintSnapshots);
         UE_LOG(LogMechanismActuator, Warning,
             TEXT("%s: Unfreeze Component restored a non-simulating Child; no constraint was created."),
             *GetPathName());
-        return true;
+        return bDependenciesRestored;
     }
 
+    LogMechanismChainState(TEXT("Unfreeze.BeforeConfigureConstraint"));
     if (!ConfigureConstraintForBodies(Parent, Child))
     {
+        LogMechanismChainState(TEXT("Unfreeze.ConfigureConstraintFailed"));
+        // Do not leave a free dynamic child after a failed thaw. Preserve the
+        // saved frames/targets for a later retry, without recapturing bad state.
+        Child->BodyInstance.bGenerateWakeEvents = false;
+        Child->SetSimulatePhysics(false);
+        const bool bReattached = Child->AttachToComponent(
+            Parent, FAttachmentTransformRules::KeepWorldTransform);
+        SetComponentFrozen(true);
+        UE_LOG(LogMechanismActuator, Error,
+            TEXT("[ActuatorDriven] Unfreeze rolled back to non-simulating child: Actuator='%s', Reattached=%d."),
+            *GetPathName(), bReattached);
+        RestoreDependentConstraintSnapshots(Child, DependentConstraintSnapshots);
+        UE_LOG(LogMechanismActuator, Error,
+            TEXT("[ActuatorDriven] Unfreeze aborted because constraint configuration returned false: Actuator='%s', Parent='%s', Child='%s'."),
+            *GetPathName(), *GetPathNameSafe(Parent), *GetPathNameSafe(Child));
         bActuatorInitialized = false;
         return false;
     }
 
+    LogMechanismChainState(TEXT("Unfreeze.AfterConfigureConstraint"));
     bActuatorInitialized = true;
     if (bHasSavedConstraintState)
     {
@@ -1668,6 +2227,12 @@ bool UMechanismActuatorComponent::UnfreezeComponentInternal()
         SetAngularOrientationTarget(SavedAngularOrientationTarget);
         SetAngularVelocityTarget(SavedAngularVelocityTarget);
         bHasSavedConstraintState = false;
+        UE_LOG(LogMechanismActuator, Log,
+            TEXT("[ActuatorDriven] Saved constraint frames and drive targets restored: Actuator='%s', Mode=%s, ConstraintValid=%s, ConstraintTerminated=%s."),
+            *GetPathName(),
+            GetMechanismActuatorModeName(Mode),
+            ConstraintInstance.IsValidConstraintInstance() ? TEXT("true") : TEXT("false"),
+            ConstraintInstance.IsTerminated() ? TEXT("true") : TEXT("false"));
         WakeChild();
 
         if (Mode == EMechanismActuatorMode::LinearPosition)
@@ -1688,7 +2253,46 @@ bool UMechanismActuatorComponent::UnfreezeComponentInternal()
         bAngularSpeedTargetInitialized = false;
         ApplyCurrentState();
     }
-    return true;
+
+    LogMechanismChainState(TEXT("Unfreeze.AfterOwnConstraintAndTargets"));
+    // Restore the affected live joints after this actuator's own joint is ready.
+    // Frozen intermediaries retain their attachment and saved joint state.
+    const bool bDependenciesRestored = RestoreDependentConstraintSnapshots(Child, DependentConstraintSnapshots);
+
+    LogMechanismChainState(TEXT("Unfreeze.AfterDependencyRestore"));
+    if (UWorld* World = GetWorld())
+    {
+        // Diagnostic-only observation after the current command returns; weak
+        // binding avoids retaining or accessing a destroyed actuator.
+        World->GetTimerManager().SetTimerForNextTick(
+            FTimerDelegate::CreateWeakLambda(this, [this]()
+            {
+                LogMechanismChainState(TEXT("Unfreeze.NextTick"));
+            }));
+    }
+    const bool bConstraintReadyAfterUnfreeze =
+        ConstraintInstance.IsValidConstraintInstance()
+        && !ConstraintInstance.IsTerminated();
+    UE_LOG(LogMechanismActuator, Log,
+        TEXT("[ActuatorDriven] Unfreeze completed: Actuator='%s', Parent='%s', Child='%s', ChildSimulating=%s, ChildBodyValid=%s, ConstraintValid=%s, ConstraintTerminated=%s, Result=%s."),
+        *GetPathName(),
+        *GetPathNameSafe(Parent),
+        *GetPathNameSafe(Child),
+        Child->IsSimulatingPhysics(ChildBoneName) ? TEXT("true") : TEXT("false"),
+        Child->GetBodyInstance(ChildBoneName, false)
+            && Child->GetBodyInstance(ChildBoneName, false)->IsValidBodyInstance()
+                ? TEXT("true") : TEXT("false"),
+        ConstraintInstance.IsValidConstraintInstance() ? TEXT("true") : TEXT("false"),
+        ConstraintInstance.IsTerminated() ? TEXT("true") : TEXT("false"),
+        bConstraintReadyAfterUnfreeze
+            ? (bDependenciesRestored ? TEXT("ConstraintReady") : TEXT("DependencyRestoreFailed")) : TEXT("ConstraintInvalid"));
+    if (!bConstraintReadyAfterUnfreeze)
+    {
+        UE_LOG(LogMechanismActuator, Error,
+            TEXT("[ActuatorDriven] Unfreeze failure: Actuator='%s' restored Child '%s' without a ready constraint."),
+            *GetPathName(), *GetPathNameSafe(Child));
+    }
+    return bConstraintReadyAfterUnfreeze && bDependenciesRestored;
 }
 
 bool UMechanismActuatorComponent::SleepComponent()

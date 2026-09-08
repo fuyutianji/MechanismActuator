@@ -340,6 +340,13 @@ public:
         DeprecationMessage="Use Is Component Frozen instead."))
     bool bComponentSleepFrozen = false;
 
+    /** Freeze at the current pose after initialization, preserving the normal thaw snapshot.
+     * Requires Child Simulate Physics. Explicit reinitialization reapplies this option.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Freeze",
+        meta=(DisplayName="Start Frozen", EditCondition="bChildSimulatePhysics"))
+    bool bStartFrozen = false;
+
     /** Freeze the moving child after the Extend To End events are sent. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Freeze",
         meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition",
@@ -357,6 +364,16 @@ public:
         meta=(EditCondition="Mode == EMechanismActuatorMode::AngularPosition",
         DisplayName="Freeze On Rotation Stopped"))
     bool bFreezeOnRotationStopped = false;
+
+    /** Enables high-frequency endpoint and position-alpha command diagnostics. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Debug",
+        meta=(DisplayName="Log Frequent Actuator Driven Events"))
+    bool bLogFrequentActuatorDrivenEvents = false;
+
+    /** Logs when a Linear Position actuator leaves a previously reported endpoint. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Debug",
+        meta=(DisplayName="Log Linear End Left Events"))
+    bool bLogLinearEndLeftEvents = false;
 
     UPROPERTY(BlueprintAssignable, Category="Mechanism|Events")
     FMechanismActuatorStateChanged OnStateChanged;
@@ -575,6 +592,36 @@ protected:
 #endif
 
 private:
+    // One scope protects managed bodies and suppresses internal motion callbacks.
+    struct FPhysicsTransitionScope
+    {
+        explicit FPhysicsTransitionScope(UMechanismActuatorComponent& Source);
+        ~FPhysicsTransitionScope();
+        FPhysicsTransitionScope(const FPhysicsTransitionScope&) = delete;
+        FPhysicsTransitionScope& operator=(const FPhysicsTransitionScope&) = delete;
+        bool bReady = true;
+        TArray<TWeakObjectPtr<UMechanismActuatorComponent>> Actuators;
+        TArray<TWeakObjectPtr<UPrimitiveComponent>> Bodies;
+        TArray<bool> AutoWeldFlags;
+    };
+    int32 PhysicsTransitionDepth = 0;
+    uint64 MotionCommandRevision = 0;
+
+    /** Runtime state needed to rebuild another actuator whose joint references a recreated body. */
+    struct FDependentConstraintSnapshot
+    {
+        TWeakObjectPtr<UMechanismActuatorComponent> Actuator;
+        TWeakObjectPtr<UPrimitiveComponent> Parent;
+        TWeakObjectPtr<UPrimitiveComponent> Child;
+        FTransform Frame1 = FTransform::Identity;
+        FTransform Frame2 = FTransform::Identity;
+        FVector LinearPositionTarget = FVector::ZeroVector;
+        FVector LinearVelocityTarget = FVector::ZeroVector;
+        FRotator AngularOrientationTarget = FRotator::ZeroRotator;
+        FVector AngularVelocityTarget = FVector::ZeroVector;
+        bool bChildWasAwake = false;
+    };
+
 #if WITH_EDITOR
     void SyncEditorConstraintPreview();
 #endif
@@ -593,6 +640,14 @@ private:
         UPrimitiveComponent* Parent, UPrimitiveComponent* Child);
     bool ConfigureConstraintForBodies(
         UPrimitiveComponent* Parent, UPrimitiveComponent* Child);
+    void CaptureDependentConstraintSnapshots(
+        UPrimitiveComponent* RecreatedBody,
+        TArray<FDependentConstraintSnapshot>& OutSnapshots) const;
+    bool RestoreDependentConstraintSnapshots(
+        UPrimitiveComponent* RecreatedBody,
+        const TArray<FDependentConstraintSnapshot>& Snapshots);
+    // Read-only diagnostic snapshot of all mechanism bodies, including frozen/detached nodes.
+    void LogMechanismChainState(const TCHAR* Phase) const;
     void ApplyCurrentState();
     void RequestLinearPositionTarget(const FVector& Target);
     void RequestAngularPositionTarget(float TargetDegrees);

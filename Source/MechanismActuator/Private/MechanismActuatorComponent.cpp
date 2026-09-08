@@ -290,11 +290,11 @@ UPrimitiveComponent* UMechanismActuatorComponent::FindPrimitiveComponent(
 void UMechanismActuatorComponent::ApplyChildPhysicsOverridesRecursively(
     UPrimitiveComponent* Child)
 {
-    if (!bMaintainBarycenter || !IsValid(Child))
+    if ((!bDisableAutoWelding && !bDisableInertiaConditioning) || !IsValid(Child))
     {
         UE_LOG(LogMechanismActuator, Log,
-            TEXT("[ActuatorDriven][InitOverride] Skipped Source='%s' Child='%s' MaintainBarycenter=%d"),
-            *GetPathName(), *GetNameSafe(Child), bMaintainBarycenter);
+            TEXT("[ActuatorDriven][InitOverride] Skipped Source='%s' Child='%s' DisableAutoWelding=%d DisableInertiaConditioning=%d"),
+            *GetPathName(), *GetNameSafe(Child), bDisableAutoWelding, bDisableInertiaConditioning);
         return;
     }
 
@@ -320,26 +320,32 @@ void UMechanismActuatorComponent::ApplyChildPhysicsOverridesRecursively(
             *GetPathName(), *Primitive->GetName(), *GetNameSafe(Primitive->GetAttachParent()),
             bInertiaBefore, bAutoWeldBefore, bWeldedBefore);
         // Disable future automatic welds before breaking an existing weld.
-        Primitive->BodyInstance.bAutoWeld = false;
-        if (Primitive->IsWelded())
+        if (bDisableAutoWelding)
         {
-            Primitive->UnWeldFromParent();
+            Primitive->BodyInstance.bAutoWeld = false;
+            if (Primitive->IsWelded())
+            {
+                Primitive->UnWeldFromParent();
+            }
         }
 
-        Primitive->BodyInstance.SetInertiaConditioningEnabled(false);
+        if (bDisableInertiaConditioning)
+        {
+            Primitive->BodyInstance.SetInertiaConditioningEnabled(false);
+        }
 
         // Some primitive types expose a different live body instance.
         if (FBodyInstance* LiveBody =
                 Primitive->GetBodyInstance(NAME_None, false);
             LiveBody && LiveBody != &Primitive->BodyInstance)
         {
-            LiveBody->bAutoWeld = false;
-            LiveBody->SetInertiaConditioningEnabled(false);
+            if (bDisableAutoWelding) LiveBody->bAutoWeld = false;
+            if (bDisableInertiaConditioning) LiveBody->SetInertiaConditioningEnabled(false);
         }
         UE_LOG(LogMechanismActuator, Log,
             TEXT("[ActuatorDriven][InitOverride] After Source='%s' Target='%s' InertiaConditioning=%d AutoWeld=%d Welded=%d UnweldRequested=%d"),
             *GetPathName(), *Primitive->GetName(), Primitive->BodyInstance.IsInertiaConditioningEnabled(),
-            Primitive->BodyInstance.bAutoWeld, Primitive->IsWelded(), bWeldedBefore);
+            Primitive->BodyInstance.bAutoWeld, Primitive->IsWelded(), bDisableAutoWelding && bWeldedBefore);
     };
 
     // Process only descendants, deepest first. The configured Child's own

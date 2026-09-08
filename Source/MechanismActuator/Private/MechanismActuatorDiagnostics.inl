@@ -66,8 +66,8 @@ void UMechanismActuatorComponent::LogMechanismChainState(const TCHAR* Phase) con
         FName ActualChildBone;
         Actuator->GetConstrainedComponents(ActualParent, ActualParentBone, ActualChild, ActualChildBone);
         UE_LOG(LogMechanismActuator, Log,
-            TEXT("[ActuatorDriven][Chain] Sample=%llu Actuator='%s' StartFrozen=%d MaintainBarycenter=%d DisableCollisionConfigured=%d Projection=%d ParentDominates=%d"),
-            Sample, *Actuator->GetName(), Actuator->bStartFrozen, Actuator->bMaintainBarycenter,
+            TEXT("[ActuatorDriven][Chain] Sample=%llu Actuator='%s' StartFrozen=%d DisableAutoWelding=%d DisableInertiaConditioning=%d DisableCollisionConfigured=%d Projection=%d ParentDominates=%d"),
+            Sample, *Actuator->GetName(), Actuator->bStartFrozen, Actuator->bDisableAutoWelding, Actuator->bDisableInertiaConditioning,
             Actuator->bDisableCollision, Actuator->bEnableProjection, Actuator->bParentDominates);
         // Geometric separation is not a solver error: free/limited axes and
         // nonzero drive targets can legitimately separate the two joint frames.

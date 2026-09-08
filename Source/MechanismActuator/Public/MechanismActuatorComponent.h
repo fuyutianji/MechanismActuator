@@ -107,13 +107,24 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Child Physics")
     bool bChildEnableGravity = false;
 
-    /**
-     * During initialization, preserves the configured Child settings while
-     * disabling inertia conditioning and auto weld on its primitive descendants.
+    /** Legacy serialized property only; no longer controls physics overrides. */
+    UPROPERTY(BlueprintReadWrite, Category="Mechanism|Child Physics",
+        meta=(DeprecatedProperty, DeprecationMessage="Use Disable Auto Welding and Disable Inertia Conditioning instead."))
+    bool bMaintainBarycenter = false;
+
+    /** On initialization, disable auto welding and unweld primitive descendants.
+     * The configured Child itself is unchanged. Off preserves existing settings.
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Child Physics",
-        meta=(ToolTip="Maintain barycenter of the child by recursively disabling inertia conditioning and auto weld"))
-    bool bMaintainBarycenter = true;
+        meta=(DisplayName="Disable Auto Welding"))
+    bool bDisableAutoWelding = false;
+
+    /** On initialization, disable inertia conditioning on primitive descendants.
+     * The configured Child itself is unchanged. Off preserves existing settings.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Child Physics",
+        meta=(DisplayName="Disable Inertia Conditioning"))
+    bool bDisableInertiaConditioning = false;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Constraint")
     bool bDisableCollision = true;

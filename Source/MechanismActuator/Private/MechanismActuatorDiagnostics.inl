@@ -2,6 +2,8 @@
 // Included by MechanismActuatorComponent.cpp to reuse its existing static log category.
 void UMechanismActuatorComponent::LogMechanismChainState(const TCHAR* Phase) const
 {
+    // Gate before collecting any bodies or computing diagnostic transforms.
+    if (!bLogMechanismChainState) return;
     AActor* Actor = GetOwner();
     if (!IsValid(Actor))
     {

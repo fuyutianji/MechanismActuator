@@ -387,6 +387,16 @@ public:
         meta=(DisplayName="Log Linear End Left Events"))
     bool bLogLinearEndLeftEvents = false;
 
+    /** Logs whole-owner body, welding, transform and constraint snapshots at physics transitions. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Debug",
+        meta=(DisplayName="Log Mechanism Chain State"))
+    bool bLogMechanismChainState = false;
+
+    /** Logs initialization, commands, constraint rebuilds and freeze/unfreeze operations. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Debug",
+        meta=(DisplayName="Log Actuator Operations"))
+    bool bLogActuatorOperations = false;
+
     UPROPERTY(BlueprintAssignable, Category="Mechanism|Events")
     FMechanismActuatorStateChanged OnStateChanged;
 

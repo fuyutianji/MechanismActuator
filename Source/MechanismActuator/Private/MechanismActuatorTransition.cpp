@@ -23,7 +23,10 @@ UMechanismActuatorComponent::FPhysicsTransitionScope::FPhysicsTransitionScope(
             continue;
         }
         Actuators.Add(Actuator);
+        Actuator->RefreshCollisionPairPolicy();
         ++Actuator->PhysicsTransitionDepth;
+        Actuator->LogSleepCallback(TEXT("Transition.Enter"), *Source.GetPathName(),
+            Source.GetMovingComponent(), NAME_None);
         UPrimitiveComponent* Body = Actuator->GetMovingComponent();
         if (!IsValid(Body) || Bodies.Contains(TWeakObjectPtr<UPrimitiveComponent>(Body)))
         {
@@ -56,6 +59,16 @@ UMechanismActuatorComponent::FPhysicsTransitionScope::~FPhysicsTransitionScope()
         if (UMechanismActuatorComponent* Actuator = WeakActuator.Get())
         {
             --Actuator->PhysicsTransitionDepth;
+            Actuator->RefreshCollisionPairPolicy();
+        }
+    }
+    // Observe only after every participant has left this scope; do not confuse
+    // partially decremented sibling depths with a persistent transition guard.
+    for (const TWeakObjectPtr<UMechanismActuatorComponent>& WeakActuator : Actuators)
+    {
+        if (UMechanismActuatorComponent* Actuator = WeakActuator.Get())
+        {
+            Actuator->LogSleepDiagnostic(TEXT("Transition.AllParticipantsExited"));
         }
     }
 }

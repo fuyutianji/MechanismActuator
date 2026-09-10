@@ -1,5 +1,14 @@
 // Read-only diagnostics: LogMechanismChainState reports scene, body and joint state.
-// Included by MechanismActuatorComponent.cpp to reuse its existing static log category.
+// Included by MechanismActuatorComponent.cpp to reuse LogMechanismActuator.
+void UMechanismActuatorComponent::LogCollisionPairPolicy(const TCHAR* Phase) const
+{
+    UE_CLOG(bLogActuatorOperations, LogMechanismActuator, Log,
+        TEXT("[ActuatorDriven][CollisionPair] Phase=%s Actuator='%s' Parent='%s' ParentBone='%s' Child='%s' ChildBone='%s' DisableCollision=%d Frozen=%d LeaseRequested=%d"),
+        Phase, *GetPathName(), *GetPathNameSafe(CollisionPairParent.Get()), *ParentBoneName.ToString(),
+        *GetPathNameSafe(CollisionPairChild.Get()), *ChildBoneName.ToString(),
+        bDisableCollision, bComponentFrozen, CollisionPairLease.IsValid());
+}
+
 void UMechanismActuatorComponent::LogMechanismChainState(const TCHAR* Phase) const
 {
     // Gate before collecting any bodies or computing diagnostic transforms.

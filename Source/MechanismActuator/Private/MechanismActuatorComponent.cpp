@@ -1,6 +1,7 @@
 // Implements actuator setup/commands, recursive descendant-physics overrides,
 // drive targets/events, freeze restoration, and dependent-joint preservation.
 #include "MechanismActuatorComponent.h"
+#include "MechanismSleepDiagnosticsSubsystem.h"
 
 #include "Components/PrimitiveComponent.h"
 #include "Engine/World.h"
@@ -9,7 +10,8 @@
 #include "PhysicsEngine/ConstraintInstance.h"
 #include "TimerManager.h"
 
-DEFINE_LOG_CATEGORY_STATIC(LogMechanismActuator, Log, All);
+// Shared with the read-only Chaos diagnostic module; category name is unchanged.
+DEFINE_LOG_CATEGORY(LogMechanismActuator);
 
 namespace
 {
@@ -30,6 +32,7 @@ namespace
 }
 
 #include "MechanismActuatorDiagnostics.inl"
+#include "MechanismActuatorSleepDiagnostics.inl"
 
 UMechanismActuatorComponent::UMechanismActuatorComponent(
     const FObjectInitializer& ObjectInitializer)
@@ -71,12 +74,15 @@ void UMechanismActuatorComponent::InitializeComponent()
     }
     if (World && World->IsGameWorld())
     {
+        StartSleepDiagnostics();
         TryCompleteStartFrozenInitialization();
     }
 }
 
 void UMechanismActuatorComponent::UninitializeComponent()
 {
+    StopSleepDiagnostics();
+    ReleaseCollisionPairPolicy(true);
     ++StartFrozenRequestRevision;
     bStartFrozenPending = false;
     // A later InitializeComponent call belongs to a new component lifecycle and
@@ -121,6 +127,7 @@ void UMechanismActuatorComponent::TickComponent(
             if (UPrimitiveComponent* Child = BoundSleepComponent.Get();
                 IsValid(Child) && Child->IsAnyRigidBodyAwake())
             {
+                LogSleepCallback(TEXT("WakePoll"), TEXT("ForwardedToWakeHandler"), Child, ChildBoneName);
                 HandleMovingComponentWake(Child, ChildBoneName);
             }
         }
@@ -132,6 +139,8 @@ void UMechanismActuatorComponent::TickComponent(
             return;
         }
 
+        const bool bDiagnosticRampWasAdvancing = bLogSleepDiagnostics
+            && !CurrentLinearPositionTargetCm.Equals(DesiredLinearPositionTargetCm, KINDA_SMALL_NUMBER);
         const FVector NextTarget = FMath::VInterpConstantTo(
             CurrentLinearPositionTargetCm,
             DesiredLinearPositionTargetCm,
@@ -143,7 +152,7 @@ void UMechanismActuatorComponent::TickComponent(
         {
             CurrentLinearPositionTargetCm = NextTarget;
             SetLinearPositionTarget(CurrentLinearPositionTargetCm);
-            WakeChild();
+            WakeChild(TEXT("LinearTargetRamp"));
         }
 
         if (CurrentLinearPositionTargetCm.Equals(
@@ -152,6 +161,10 @@ void UMechanismActuatorComponent::TickComponent(
             CurrentLinearPositionTargetCm = DesiredLinearPositionTargetCm;
             SetLinearPositionTarget(CurrentLinearPositionTargetCm);
             RefreshLinearSpeedTick();
+            if (bDiagnosticRampWasAdvancing)
+            {
+                LogSleepDiagnostic(TEXT("TargetRamp.LinearCompleted"));
+            }
         }
         return;
     }
@@ -174,6 +187,9 @@ void UMechanismActuatorComponent::TickComponent(
         return;
     }
 
+    const bool bDiagnosticRampWasAdvancing = bLogSleepDiagnostics
+        && !FMath::IsNearlyEqual(CurrentAngularPositionTargetDegrees,
+            DesiredAngularPositionTargetDegrees, KINDA_SMALL_NUMBER);
     const float NextTargetDegrees = FMath::FInterpConstantTo(
         CurrentAngularPositionTargetDegrees,
         DesiredAngularPositionTargetDegrees,
@@ -188,7 +204,7 @@ void UMechanismActuatorComponent::TickComponent(
         CurrentAngularPositionTargetDegrees = NextTargetDegrees;
         SetAngularOrientationTarget(
             MakeAngularTarget(CurrentAngularPositionTargetDegrees));
-        WakeChild();
+        WakeChild(TEXT("AngularTargetRamp"));
     }
 
     if (FMath::IsNearlyEqual(
@@ -201,6 +217,10 @@ void UMechanismActuatorComponent::TickComponent(
         SetAngularOrientationTarget(
             MakeAngularTarget(CurrentAngularPositionTargetDegrees));
         RefreshAngularSpeedTick();
+        if (bDiagnosticRampWasAdvancing)
+        {
+            LogSleepDiagnostic(TEXT("TargetRamp.AngularCompleted"));
+        }
     }
 }
 
@@ -228,6 +248,8 @@ void UMechanismActuatorComponent::OnRegister()
 #endif
 
     Super::OnRegister();
+    RefreshCollisionPairPolicy();
+    StartSleepDiagnostics();
 }
 
 #if WITH_EDITOR
@@ -610,6 +632,8 @@ bool UMechanismActuatorComponent::ConfigureConstraintForBodies(
 
     // The constraint component transform supplies the joint frame. Rebuilding
     // here also refreshes body handles after SetSimulatePhysics recreated them.
+    LogSleepDiagnostic(TEXT("Constraint.BeforeRebuild"));
+    ++DiagnosticConstraintRevision;
     SetConstrainedComponents(Parent, ParentBoneName, Child, ChildBoneName);
 
     UE_CLOG(bLogActuatorOperations, LogMechanismActuator, Log,
@@ -638,6 +662,7 @@ bool UMechanismActuatorComponent::ConfigureConstraintForBodies(
             return false;
     }
 
+    LogSleepDiagnostic(TEXT("Constraint.AfterRebuildAndConfigure"));
     const FBodyInstance* ParentBodyAfter = Parent->GetBodyInstance(ParentBoneName, false);
     const FBodyInstance* ChildBodyAfter = Child->GetBodyInstance(ChildBoneName, false);
     const bool bConstraintReady = ConstraintInstance.IsValidConstraintInstance()
@@ -794,6 +819,10 @@ bool UMechanismActuatorComponent::RestoreDependentConstraintSnapshots(
             continue;
         }
 
+        DependentActuator->LogSleepCallback(TEXT("DependencyRestore"),
+            Snapshot.bChildWasAwake ? TEXT("SnapshotAwake") : TEXT("SnapshotAsleep"),
+            RecreatedBody, NAME_None);
+        DependentActuator->LogSleepDiagnostic(TEXT("Dependency.BeforeRestore"));
         const bool bConfigured = DependentActuator->ConfigureConstraintForBodies(
             DependentParent, DependentChild);
         const bool bConstraintReady = bConfigured
@@ -857,12 +886,15 @@ bool UMechanismActuatorComponent::RestoreDependentConstraintSnapshots(
         DependentActuator->bActuatorInitialized = true;
         if (Snapshot.bChildWasAwake)
         {
-            DependentActuator->WakeChild();
+            DependentActuator->WakeChild(TEXT("DependencyRestore"));
         }
         else
         {
+            DependentActuator->LogSleepDiagnostic(TEXT("Dependency.BeforeExplicitSleep"));
             DependentChild->PutAllRigidBodiesToSleep();
         }
+
+        DependentActuator->LogSleepDiagnostic(TEXT("Dependency.AfterRestoreAndSleepState"));
 
         UE_CLOG(bLogActuatorOperations, LogMechanismActuator, Log,
             TEXT("[ActuatorDriven] Dependent constraint restored after body recreation: SourceActuator='%s', RecreatedBody='%s', DependentActuator='%s', Mode=%s, Parent='%s', Child='%s', RestoredAwake=%s, ConstraintValid=%s, ConstraintTerminated=%s."),
@@ -883,6 +915,7 @@ bool UMechanismActuatorComponent::RestoreDependentConstraintSnapshots(
 
 void UMechanismActuatorComponent::ConfigureCommonConstraint()
 {
+    RefreshCollisionPairPolicy();
     ConstraintInstance.SetDisableCollision(bDisableCollision);
     ConstraintInstance.SetParentDominates(bParentDominates);
 
@@ -1094,7 +1127,7 @@ void UMechanismActuatorComponent::ConfigureAngularVelocity()
     SetAngularDriveAccelerationMode(bAngularAccelerationDrive);
 }
 
-void UMechanismActuatorComponent::WakeChild() const
+void UMechanismActuatorComponent::WakeChild(const TCHAR* DiagnosticReason) const
 {
     if (bComponentFrozen)
     {
@@ -1104,6 +1137,11 @@ void UMechanismActuatorComponent::WakeChild() const
     if (UPrimitiveComponent* Child = GetMovingComponent();
         IsValid(Child) && Child->IsSimulatingPhysics())
     {
+        if (bLogSleepDiagnostics)
+        {
+            ++DiagnosticWakeRequests;
+            DiagnosticLastWakeReason = DiagnosticReason;
+        }
         Child->WakeAllRigidBodies();
     }
 }
@@ -1124,6 +1162,7 @@ void UMechanismActuatorComponent::BindMovingComponentEvents(
         Child->OnComponentWake.AddUniqueDynamic(
             this, &UMechanismActuatorComponent::HandleMovingComponentWake);
         Child->BodyInstance.bGenerateWakeEvents = true;
+        LogSleepDiagnostic(TEXT("SleepBinding.Reused"));
         return;
     }
 
@@ -1136,10 +1175,12 @@ void UMechanismActuatorComponent::BindMovingComponentEvents(
     Child->OnComponentWake.AddUniqueDynamic(
         this, &UMechanismActuatorComponent::HandleMovingComponentWake);
     Child->BodyInstance.bGenerateWakeEvents = true;
+    LogSleepDiagnostic(TEXT("SleepBinding.Bound"));
 }
 
 void UMechanismActuatorComponent::UnbindMovingComponentEvents()
 {
+    LogSleepDiagnostic(TEXT("SleepBinding.BeforeUnbind"));
     if (UPrimitiveComponent* Child = BoundSleepComponent.Get(); IsValid(Child))
     {
         Child->OnComponentSleep.RemoveDynamic(
@@ -1162,6 +1203,7 @@ void UMechanismActuatorComponent::ArmLinearMotionStoppedEvent()
         && bActuatorInitialized
         && !bComponentFrozen
         && IsValid(BoundSleepComponent.Get());
+    LogSleepDiagnostic(TEXT("Completion.ArmLinear"));
 }
 
 void UMechanismActuatorComponent::ArmAngularTargetStoppedEvent()
@@ -1171,6 +1213,7 @@ void UMechanismActuatorComponent::ArmAngularTargetStoppedEvent()
         && bActuatorInitialized
         && !bComponentFrozen
         && IsValid(BoundSleepComponent.Get());
+    LogSleepDiagnostic(TEXT("Completion.ArmAngular"));
 }
 
 void UMechanismActuatorComponent::ArmAngularTargetHardStop()
@@ -1283,6 +1326,10 @@ void UMechanismActuatorComponent::CompleteAngularPositionMotion(
 
     // Endpoint listeners may issue a new target. Never freeze that new motion
     // as the completion side effect of the command that just ended.
+    LogSleepCallback(TEXT("AngularEndpoint.AfterBroadcast"),
+        CompletedCommand != MotionCommandRevision ? TEXT("FreezeSkipped.NewCommand") :
+        (bForceFreeze || bFreezeOnRotationStopped) ? TEXT("WillFreeze") : TEXT("FreezeDisabled"),
+        MovingComponent, BoneName);
     if (CompletedCommand != MotionCommandRevision)
     {
         return;
@@ -1323,6 +1370,16 @@ void UMechanismActuatorComponent::PrepareInitialLinearEnd()
 void UMechanismActuatorComponent::HandleMovingComponentSleep(
     UPrimitiveComponent* SleepingComponent, const FName BoneName)
 {
+    LogSleepCallback(TEXT("Sleep"),
+        PhysicsTransitionDepth > 0 ? TEXT("Ignored.Transition") :
+        SleepingComponent != BoundSleepComponent.Get() ? TEXT("Ignored.Component") :
+        (ChildBoneName != NAME_None && BoneName != NAME_None && BoneName != ChildBoneName) ? TEXT("Ignored.Bone") :
+        Mode == EMechanismActuatorMode::AngularPosition ?
+            (bWaitingForAngularTargetStop ? TEXT("Accepted.Angular") : TEXT("Ignored.AngularNotWaiting")) :
+        Mode != EMechanismActuatorMode::LinearPosition ? TEXT("Ignored.Mode") :
+        !bWaitingForLinearMotionStop ? TEXT("Ignored.LinearNotWaiting") : TEXT("Accepted.Linear"),
+        SleepingComponent, BoneName);
+    LogSleepDiagnostic(TEXT("SleepCallback.Entry"));
     if (PhysicsTransitionDepth > 0
         || SleepingComponent != BoundSleepComponent.Get()
         || (ChildBoneName != NAME_None
@@ -1382,6 +1439,10 @@ void UMechanismActuatorComponent::HandleMovingComponentSleep(
     // Send both forms of the To End event before replacing the rigid body with
     // the frozen Keep World attachment. FreezeComponentInternal is idempotent
     // if an event receiver already froze the same moving component.
+    LogSleepCallback(TEXT("LinearEndpoint.AfterBroadcast"),
+        CompletedCommand != MotionCommandRevision ? TEXT("FreezeSkipped.NewCommand") :
+        bFreezeAtReachedEnd ? TEXT("WillFreeze") : TEXT("FreezeDisabled"),
+        SleepingComponent, BoneName);
     if (bFreezeAtReachedEnd && CompletedCommand == MotionCommandRevision)
     {
         FreezeComponentInternal();
@@ -1391,6 +1452,14 @@ void UMechanismActuatorComponent::HandleMovingComponentSleep(
 void UMechanismActuatorComponent::HandleMovingComponentWake(
     UPrimitiveComponent* WakingComponent, const FName BoneName)
 {
+    LogSleepCallback(TEXT("Wake"),
+        PhysicsTransitionDepth > 0 ? TEXT("Ignored.Transition") :
+        !bHasReachedLinearEnd ? TEXT("Ignored.NoReachedLinearEnd") :
+        bLinearEndWakeSuppressedUntilCommand ? TEXT("Ignored.UntilCommand") :
+        WakingComponent != BoundSleepComponent.Get() ? TEXT("Ignored.Component") :
+        (ChildBoneName != NAME_None && BoneName != NAME_None && BoneName != ChildBoneName) ? TEXT("Ignored.Bone") :
+        TEXT("Accepted.LeaveLinearEnd"), WakingComponent, BoneName);
+    LogSleepDiagnostic(TEXT("WakeCallback.Entry"));
     if (PhysicsTransitionDepth > 0
         || !bHasReachedLinearEnd
         || bLinearEndWakeSuppressedUntilCommand
@@ -1663,7 +1732,7 @@ void UMechanismActuatorComponent::ApplyCurrentState()
             break;
     }
 
-    WakeChild();
+    WakeChild(TEXT("ApplyCurrentState"));
 }
 
 void UMechanismActuatorComponent::SetActuatorActive(const bool bActive)
@@ -1943,6 +2012,7 @@ void UMechanismActuatorComponent::FreezeComponent()
 
 bool UMechanismActuatorComponent::FreezeComponentInternal()
 {
+    LogSleepDiagnostic(TEXT("Freeze.Entry"));
     ++StartFrozenRequestRevision;
     if (bComponentFrozen)
     {
@@ -2084,7 +2154,9 @@ bool UMechanismActuatorComponent::FreezeComponentInternal()
     // simulation alone does not imply destruction of its physics actor.
     Child->BodyInstance.bGenerateWakeEvents = false;
     LogMechanismChainState(TEXT("Freeze.BeforeSetSimulatePhysics"));
+    LogSleepDiagnostic(TEXT("Freeze.BeforeSetSimulatePhysics"));
     Child->SetSimulatePhysics(false);
+    LogSleepDiagnostic(TEXT("Freeze.AfterSetSimulatePhysics"));
     LogMechanismChainState(TEXT("Freeze.AfterSetSimulatePhysics"));
     UE_CLOG(bLogActuatorOperations, LogMechanismActuator, Log,
         TEXT("[ActuatorDriven] Child physics disabled before constraint break: Actuator='%s', Child='%s', Simulating=%s, PhysicsState=%s, ConstraintValid=%s, ConstraintTerminated=%s."),
@@ -2143,6 +2215,7 @@ bool UMechanismActuatorComponent::FreezeComponentInternal()
     }
 
     LogMechanismChainState(TEXT("Freeze.AfterAttachment"));
+    LogSleepDiagnostic(TEXT("Freeze.AfterAttachment"));
     // A frozen component must never be allowed to become dynamic,
     // including when another plugin command ran during the attachment update.
     Child->BodyInstance.bGenerateWakeEvents = false;
@@ -2171,6 +2244,7 @@ bool UMechanismActuatorComponent::FreezeComponentInternal()
         Child->IsSimulatingPhysics() ? TEXT("true") : TEXT("false"),
         Child->GetAttachParent() == Parent ? TEXT("true") : TEXT("false"));
 
+    LogSleepDiagnostic(TEXT("Freeze.CompletedInsideTransition"));
     return bDependenciesRestored;
 }
 
@@ -2181,6 +2255,7 @@ void UMechanismActuatorComponent::UnfreezeComponent()
 
 bool UMechanismActuatorComponent::UnfreezeComponentInternal()
 {
+    LogSleepDiagnostic(TEXT("Unfreeze.Entry"));
     ++StartFrozenRequestRevision;
     if (!bComponentFrozen)
     {
@@ -2229,7 +2304,9 @@ bool UMechanismActuatorComponent::UnfreezeComponentInternal()
     LogMechanismChainState(TEXT("Unfreeze.AfterDetach"));
     Child->BodyInstance.bGenerateWakeEvents = bSavedGenerateWakeEvents;
     LogMechanismChainState(TEXT("Unfreeze.BeforeSetSimulatePhysics"));
+    LogSleepDiagnostic(TEXT("Unfreeze.BeforeSetSimulatePhysics"));
     Child->SetSimulatePhysics(bSavedChildSimulatePhysics);
+    LogSleepDiagnostic(TEXT("Unfreeze.AfterSetSimulatePhysics"));
     LogMechanismChainState(TEXT("Unfreeze.AfterSetSimulatePhysics"));
     Child->SetEnableGravity(bSavedChildEnableGravity);
     SetComponentFrozen(false);
@@ -2307,7 +2384,7 @@ bool UMechanismActuatorComponent::UnfreezeComponentInternal()
             GetMechanismActuatorModeName(Mode),
             ConstraintInstance.IsValidConstraintInstance() ? TEXT("true") : TEXT("false"),
             ConstraintInstance.IsTerminated() ? TEXT("true") : TEXT("false"));
-        WakeChild();
+        WakeChild(TEXT("Unfreeze.RestoreTargets"));
 
         if (Mode == EMechanismActuatorMode::LinearPosition)
         {
@@ -2334,6 +2411,7 @@ bool UMechanismActuatorComponent::UnfreezeComponentInternal()
     const bool bDependenciesRestored = RestoreDependentConstraintSnapshots(Child, DependentConstraintSnapshots);
 
     LogMechanismChainState(TEXT("Unfreeze.AfterDependencyRestore"));
+    LogSleepDiagnostic(TEXT("Unfreeze.CompletedInsideTransition"));
     if (UWorld* World = GetWorld())
     {
         // Diagnostic-only observation after the current command returns; weak

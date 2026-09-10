@@ -3,10 +3,12 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Components/PrimitiveComponent.h"
 #include "PhysicsEngine/PhysicsConstraintComponent.h"
 #include "MechanismActuatorComponent.generated.h"
 
 class UPrimitiveComponent;
+struct FMechanismCollisionPairLease;
 
 UENUM(BlueprintType)
 enum class EMechanismActuatorMode : uint8
@@ -126,8 +128,12 @@ public:
         meta=(DisplayName="Disable Inertia Conditioning"))
     bool bDisableInertiaConditioning = false;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Constraint")
+    /** Ignore parent/child physics collisions while initialized, including frozen periods without a motion constraint. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, BlueprintSetter=SetMechanismDisableCollision, Category="Mechanism|Constraint")
     bool bDisableCollision = true;
+
+    UFUNCTION(BlueprintSetter, Category="Mechanism|Constraint")
+    void SetMechanismDisableCollision(bool bDisable);
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Constraint")
     bool bParentDominates = false;
@@ -397,6 +403,21 @@ public:
         meta=(DisplayName="Log Actuator Operations"))
     bool bLogActuatorOperations = false;
 
+    /** Enable before PIE. Read-only frame-end sampling continues without actuator Tick or sleep events. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Debug",
+        meta=(DisplayName="Log Sleep Diagnostics"))
+    bool bLogSleepDiagnostics = false;
+
+    /** Enable before PIE. Read-only Chaos PostSolve/next-step island and particle snapshots. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Debug",
+        meta=(DisplayName="Log Chaos Sleep Diagnostics"))
+    bool bLogChaosSleepDiagnostics = false;
+
+    /** Seconds between periodic samples; event and transition snapshots are not throttled. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Debug",
+        meta=(DisplayName="Sleep Diagnostic Interval", EditCondition="bLogSleepDiagnostics || bLogChaosSleepDiagnostics", ClampMin="0.1", Units="s"))
+    float SleepDiagnosticInterval = 0.5f;
+
     UPROPERTY(BlueprintAssignable, Category="Mechanism|Events")
     FMechanismActuatorStateChanged OnStateChanged;
 
@@ -603,6 +624,7 @@ protected:
     virtual void InitializeComponent() override;
     virtual void UninitializeComponent() override;
     virtual void OnRegister() override;
+    virtual void OnUnregister() override;
     virtual void TickComponent(
         float DeltaTime,
         ELevelTick TickType,
@@ -614,6 +636,16 @@ protected:
 #endif
 
 private:
+    // Collision policy lives independently of the motion constraint. Chaos keeps
+    // reference counts so separate owners cannot remove each other's exclusions.
+    TSharedPtr<FMechanismCollisionPairLease, ESPMode::ThreadSafe> CollisionPairLease;
+    TWeakObjectPtr<UPrimitiveComponent> CollisionPairParent;
+    TWeakObjectPtr<UPrimitiveComponent> CollisionPairChild;
+    void RefreshCollisionPairPolicy();
+    void LogCollisionPairPolicy(const TCHAR* Phase) const;
+    void ReleaseCollisionPairPolicy(bool bUnsubscribe);
+    UFUNCTION()
+    void HandleCollisionPairPhysicsState(UPrimitiveComponent* Component, EComponentPhysicsStateChange Change);
     // One scope protects managed bodies and suppresses internal motion callbacks.
     struct FPhysicsTransitionScope
     {
@@ -676,6 +708,19 @@ private:
         const TArray<FDependentConstraintSnapshot>& Snapshots);
     // Read-only diagnostic snapshot of all mechanism bodies, including frozen/detached nodes.
     void LogMechanismChainState(const TCHAR* Phase) const;
+    // Observation-only state. Never used to decide motion, sleep or freeze.
+    void StartSleepDiagnostics();
+    void StopSleepDiagnostics();
+    void QueueChaosSleepDiagnostic();
+    void ObserveSleepAtFrameEnd(UWorld* World, ELevelTick TickType, float DeltaSeconds);
+    void LogSleepDiagnostic(const TCHAR* Phase);
+    void LogSleepCallback(const TCHAR* Event, const TCHAR* Decision,
+        UPrimitiveComponent* Component, FName BoneName) const;
+    FDelegateHandle SleepDiagnosticTickHandle;
+    double NextSleepDiagnosticTime = 0.0;
+    uint64 DiagnosticConstraintRevision = 0;
+    mutable uint64 DiagnosticWakeRequests = 0;
+    mutable const TCHAR* DiagnosticLastWakeReason = TEXT("None");
     void ApplyCurrentState();
     void RequestLinearPositionTarget(const FVector& Target);
     void RequestAngularPositionTarget(float TargetDegrees);
@@ -702,7 +747,7 @@ private:
         UPrimitiveComponent* WakingComponent, FName BoneName);
 
     void UpdateExposedStates();
-    void WakeChild() const;
+    void WakeChild(const TCHAR* DiagnosticReason = TEXT("OtherCommand")) const;
     void SetComponentFrozen(bool bFrozen);
     bool FreezeComponentInternal();
     bool UnfreezeComponentInternal();

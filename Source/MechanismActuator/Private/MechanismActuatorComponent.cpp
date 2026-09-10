@@ -1,6 +1,7 @@
 // Implements actuator setup/commands, recursive descendant-physics overrides,
 // drive targets/events, freeze restoration, and dependent-joint preservation.
 #include "MechanismActuatorComponent.h"
+#include "MechanismActuatorLog.h"
 #include "MechanismSleepDiagnosticsSubsystem.h"
 
 #include "Components/PrimitiveComponent.h"
@@ -463,7 +464,7 @@ bool UMechanismActuatorComponent::InitializeActuator()
 
         // The initialization guard keeps these overrides lifecycle-scoped.
         LogMechanismChainState(TEXT("Initialize.BeforeSetSimulatePhysics"));
-        Child->SetSimulatePhysics(bChildSimulatePhysics);
+        SetMovingComponentSimulation(Child, bChildSimulatePhysics, TEXT("Initialize"));
         LogMechanismChainState(TEXT("Initialize.AfterSetSimulatePhysics"));
         Child->SetEnableGravity(bChildEnableGravity);
 
@@ -2155,7 +2156,7 @@ bool UMechanismActuatorComponent::FreezeComponentInternal()
     Child->BodyInstance.bGenerateWakeEvents = false;
     LogMechanismChainState(TEXT("Freeze.BeforeSetSimulatePhysics"));
     LogSleepDiagnostic(TEXT("Freeze.BeforeSetSimulatePhysics"));
-    Child->SetSimulatePhysics(false);
+    SetMovingComponentSimulation(Child, false, TEXT("Freeze.BeforeConstraintBreak"));
     LogSleepDiagnostic(TEXT("Freeze.AfterSetSimulatePhysics"));
     LogMechanismChainState(TEXT("Freeze.AfterSetSimulatePhysics"));
     UE_CLOG(bLogActuatorOperations, LogMechanismActuator, Log,
@@ -2219,7 +2220,7 @@ bool UMechanismActuatorComponent::FreezeComponentInternal()
     // A frozen component must never be allowed to become dynamic,
     // including when another plugin command ran during the attachment update.
     Child->BodyInstance.bGenerateWakeEvents = false;
-    Child->SetSimulatePhysics(false);
+    SetMovingComponentSimulation(Child, false, TEXT("Freeze.AfterAttachment"));
 
     // Restore captured joints only after the final attachment state is stable.
     // Simulation toggles do not necessarily recreate bodies; topology changes
@@ -2305,7 +2306,7 @@ bool UMechanismActuatorComponent::UnfreezeComponentInternal()
     Child->BodyInstance.bGenerateWakeEvents = bSavedGenerateWakeEvents;
     LogMechanismChainState(TEXT("Unfreeze.BeforeSetSimulatePhysics"));
     LogSleepDiagnostic(TEXT("Unfreeze.BeforeSetSimulatePhysics"));
-    Child->SetSimulatePhysics(bSavedChildSimulatePhysics);
+    SetMovingComponentSimulation(Child, bSavedChildSimulatePhysics, TEXT("Unfreeze"));
     LogSleepDiagnostic(TEXT("Unfreeze.AfterSetSimulatePhysics"));
     LogMechanismChainState(TEXT("Unfreeze.AfterSetSimulatePhysics"));
     Child->SetEnableGravity(bSavedChildEnableGravity);
@@ -2347,7 +2348,7 @@ bool UMechanismActuatorComponent::UnfreezeComponentInternal()
         // Do not leave a free dynamic child after a failed thaw. Preserve the
         // saved frames/targets for a later retry, without recapturing bad state.
         Child->BodyInstance.bGenerateWakeEvents = false;
-        Child->SetSimulatePhysics(false);
+        SetMovingComponentSimulation(Child, false, TEXT("Unfreeze.Rollback"));
         const bool bReattached = Child->AttachToComponent(
             Parent, FAttachmentTransformRules::KeepWorldTransform);
         SetComponentFrozen(true);

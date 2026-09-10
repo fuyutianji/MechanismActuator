@@ -749,6 +749,8 @@ private:
     void UpdateExposedStates();
     void WakeChild(const TCHAR* DiagnosticReason = TEXT("OtherCommand")) const;
     void SetComponentFrozen(bool bFrozen);
+    // Central simulation boundary; retires targets only when entering simulation.
+    void SetMovingComponentSimulation(UPrimitiveComponent* Child, bool bSimulate, const TCHAR* Phase);
     bool FreezeComponentInternal();
     bool UnfreezeComponentInternal();
     bool UsesLinearAxis(EMechanismLinearAxis Axis) const;

@@ -2,6 +2,7 @@
 // world-owned callbacks sample islands/edges/particles before sleep and next step.
 // No UObject access on PT, retained particle pointers, solver writes or engine patches.
 #include "MechanismActuatorComponent.h"
+#include "MechanismActuatorLog.h"
 #include "MechanismSleepDiagnosticsSubsystem.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"

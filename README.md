@@ -22,7 +22,7 @@ Reusable Unreal Engine C++ physics actuator component for industrial mechanisms.
 - Common drive, limit, projection and breakable settings are exposed; rarely used native constraint fields are hidden.
 - Blueprint functions include Set Actuator Active, Toggle, Extend, Retract, Open, Close, Set Position Alpha, Set Angular Position Percent, Rotate Clockwise, Rotate Counter Clockwise, Stop Rotation, Initialize Actuator, Reinitialize Actuator, Freeze Component, Unfreeze Component and Is Component Frozen.
 - On Extend To End reports a sleeping/stopped non-zero Linear target, including intermediate Set Position Alpha targets; On Retract To End is reserved for the zero target. The matching Leave events report departure from the previously reached target class.
-- On Rotate To Target reports when Angular Position motion sleeps/stops after Open, Close, or Set Position Alpha, including intermediate alpha targets.
+- On Rotate To Target reports actual angular arrival within tolerance. On Rotation Blocked reports a no-progress timeout; an early physics sleep is neither result.
 - The Mechanism|Freeze group exposes mode-specific automatic freezing: Linear Position enables Freeze On Extend To End and Freeze On Retract To End, while Angular Position enables Freeze On Rotation Stopped.
 - Every actuator initializes inactive. Linear Position therefore registers its initial PIE command state as Retract End, so the first Extend command emits On Leave From Retract End before moving toward Extend End.
 
@@ -119,7 +119,7 @@ Use this for a door or hinge.
 - Open Angle Degrees: for example 90.
 - Angular Max Speed: 0 for legacy instant targeting, or a positive speed in deg/s.
 - Force Stop At Angular Target: disabled by default; enable it to freeze at the commanded angle.
-- Angular Target Stop Tolerance: angle tolerance for the hard stop, default 0.5 degrees.
+- Angular Target Stop Tolerance: actual arrival tolerance (also used by the hard stop), default 0.5 degrees.
 - Call `Open`, `Close`, `Toggle`, or `Set Actuator Active(bool)`.
 
 The chosen angular axis is Limited automatically; the other two angular axes and all linear axes are Locked. Angles are limited to less than 180 degrees by the underlying constraint.
@@ -138,16 +138,42 @@ a new target. **Start Rotating** is sent after the target command is armed.
 
 With **Force Stop At Angular Target** enabled, the component reads the selected
 Twist/Swing constraint angle while the command is active. Entering the configured
-tolerance or crossing the target sends **On Rotate To End** and the compatibility
-**On Rotate To Target** event, zeros angular velocity, and immediately freezes the
-child at its current pose. This prevents drive overshoot beyond the commanded
-Open/Close/Alpha angle. The next Angular Position command automatically unfreezes it.
+tolerance sends **On Rotate To End** and **On Rotate To Target**, zeros angular
+velocity, and freezes the child at its current pose. Crossing the target outside
+tolerance no longer freezes an inaccurate pose. The next Angular Position command
+automatically unfreezes it. With Force Stop disabled, the component waits for the
+body to settle/sleep within tolerance instead of forcing a freeze.
 
-A physical obstruction may stop the child before the target. When the blocked
-body sleeps, the same rotation-end events are sent without checking the target
-angle. Enable **Freeze On Rotation Stopped** to freeze that obstructed pose.
+A small command (for example 75 -> 76 degrees) can put a slow body back to sleep
+before arrival. While a command is pending, the component monitors actual error
+and wakes an early-sleeping body on tick, not inside the physics callback. No global
+sleep thresholds, physical materials, mass or drive strengths are changed.
+
+**Angular Target Stop Tolerance** (default 0.5 degrees) applies to all Angular
+Position commands. For finer positioning, use a smaller tolerance such as 0.1.
+**Angular Stall Timeout** (advanced, default 1 second) limits continuous time with
+no meaningful improvement in angular error. Slow rate-limited commands use a
+scaled progress threshold. Duplicate targets do not restart a pending watchdog.
+
+On timeout, position drive is released (joint limits and velocity damping remain)
+and **On Rotation Blocked** is sent, not **On Rotate To Target**. A new command
+restores position drive and retries. Enable **Freeze On Rotation Stopped** to
+freeze the obstructed pose. **On Rotate To End** remains the legacy completion
+event for either arrival or a confirmed stall; consumers needing a true arrival
+must use **On Rotate To Target**. The last command result is also available as
+**Angular Target Reached** / **Angular Motion Blocked**, cleared on a new command.
+The stall result detects lack of progress, not a collision sensor: an unreachable
+target or insufficient drive can produce the same result. Removing an obstacle
+after a confirmed stall requires a new command to retry.
 All rotation events report the moving component and bone name and support both
 assignable events and BlueprintNativeEvent overrides.
+
+Regression tests: `Automation RunTests MechanismActuator.Angular` runs an isolated
+transient physics world (no project maps/PLC). Covers small forward/reverse steps,
+early sleep, duplicate targets, stall recovery, rate limiting and soft completion.
+For an optional asset-based run, pass `-MechanismActuatorTestMesh=/Game/Path/Mesh.Mesh`
+on the editor command line. This uses that mesh's collision geometry and automatic
+mass in the isolated fixture without loading a device Blueprint or modifying assets.
 
 ## Angular Velocity mode
 

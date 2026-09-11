@@ -10,6 +10,9 @@
 class UPrimitiveComponent;
 struct FMechanismCollisionPairLease;
 
+/** Optional host permission policy; true permits device commands. */
+DECLARE_DELEGATE_RetVal_OneParam(bool, FMechanismActuatorControlGate, const UObject*);
+
 UENUM(BlueprintType)
 enum class EMechanismActuatorMode : uint8
 {
@@ -85,6 +88,9 @@ class MECHANISMACTUATOR_API UMechanismActuatorComponent
 
 public:
     UMechanismActuatorComponent(const FObjectInitializer& ObjectInitializer);
+
+    /** Host modules register on startup and clear on shutdown; no project dependency. */
+    static void SetExternalControlGate(FMechanismActuatorControlGate InGate);
 
     // Custom editor rows show dropdowns from the current Blueprint component tree.
     UPROPERTY(EditAnywhere, Category="Mechanism|Connection")
@@ -183,19 +189,25 @@ public:
 
     /**
      * Stops and freezes the moving child as soon as the selected constraint
-     * axis reaches or crosses the commanded Angular Position target.
+     * axis reaches the commanded Angular Position target within tolerance.
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Angular Position",
         meta=(EditCondition="Mode == EMechanismActuatorMode::AngularPosition",
         EditConditionHides, DisplayName="Force Stop At Angular Target"))
     bool bForceStopAtAngularTarget = false;
 
-    /** Angular distance treated as reaching the commanded hard-stop target. */
+    /** Actual angular error allowed for target-reached events and the optional hard stop. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Angular Position",
-        meta=(EditCondition="Mode == EMechanismActuatorMode::AngularPosition && bForceStopAtAngularTarget",
+        meta=(EditCondition="Mode == EMechanismActuatorMode::AngularPosition",
         EditConditionHides, ClampMin="0.01", ClampMax="10.0", Units="deg",
         DisplayName="Angular Target Stop Tolerance"))
     float AngularTargetStopToleranceDegrees = 0.5f;
+
+    /** Time without progress toward an angular target before reporting blocked and releasing position drive. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Angular Position", AdvancedDisplay,
+        meta=(EditCondition="Mode == EMechanismActuatorMode::AngularPosition", EditConditionHides,
+        ClampMin="0.1", Units="s", DisplayName="Angular Stall Timeout"))
+    float AngularStallTimeoutSeconds = 1.0f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Angular Velocity",
         meta=(EditCondition="Mode == EMechanismActuatorMode::AngularVelocity", EditConditionHides))
@@ -334,6 +346,14 @@ public:
     EMechanismAngularPositionState AngularPositionState =
         EMechanismAngularPositionState::Closed;
 
+    /** Result of the last Angular Position command, not a continuously polled pose sensor. */
+    UPROPERTY(BlueprintReadOnly, Transient, Category="Mechanism|Runtime|State")
+    bool bAngularTargetReached = false;
+
+    /** No progress before the stall timeout; cleared by a new angular command. */
+    UPROPERTY(BlueprintReadOnly, Transient, Category="Mechanism|Runtime|State")
+    bool bAngularMotionBlocked = false;
+
     // Commanded state for Angular Velocity mode.
     UPROPERTY(BlueprintReadOnly, Transient, Category="Mechanism|Runtime|State")
     EMechanismAngularVelocityState AngularVelocityState =
@@ -377,7 +397,7 @@ public:
         DisplayName="Freeze On Retract To End"))
     bool bFreezeOnRetractToEnd = false;
 
-    /** Freeze after On Rotate To End and the compatibility On Rotate To Target event are sent. */
+    /** Freeze after angular completion (target reached or confirmed stall) events are sent. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Freeze",
         meta=(EditCondition="Mode == EMechanismActuatorMode::AngularPosition",
         DisplayName="Freeze On Rotation Stopped"))
@@ -442,19 +462,24 @@ public:
     FMechanismActuatorLinearEndEvent OnLeaveFromRetractEnd;
 
     /**
-     * Fired when Angular Position motion sleeps/stops after Open, Close, or
-     * Set Position Alpha, including intermediate alpha targets.
+     * Fired only when the actual Angular Position is within target tolerance.
+     * An early sleep or an obstruction is not a target-reached event.
      */
     UPROPERTY(BlueprintAssignable, Category="Mechanism|Events",
         meta=(DisplayName="On Rotate To Target"))
     FMechanismActuatorAngularTargetEvent OnRotateToTarget;
+
+    /** Fired after the angular stall timeout without sufficient progress, never as target reached. */
+    UPROPERTY(BlueprintAssignable, Category="Mechanism|Events",
+        meta=(DisplayName="On Rotation Blocked"))
+    FMechanismActuatorAngularTargetEvent OnRotationBlocked;
 
     /** Fired when an Angular Position command starts moving toward a target. */
     UPROPERTY(BlueprintAssignable, Category="Mechanism|Events",
         meta=(DisplayName="Start Rotating"))
     FMechanismActuatorAngularTargetEvent StartRotating;
 
-    /** Fired when Angular Position motion sleeps/stops, including when physically blocked before its target. */
+    /** Legacy completion event: actual target reached OR confirmed stall. Use the specific result events to distinguish. */
     UPROPERTY(BlueprintAssignable, Category="Mechanism|Events",
         meta=(DisplayName="On Rotate To End"))
     FMechanismActuatorAngularTargetEvent OnRotateToEnd;
@@ -608,6 +633,12 @@ protected:
         UPrimitiveComponent* MovingComponent, FName BoneName);
 
     UFUNCTION(BlueprintNativeEvent, Category="Mechanism|Events",
+        meta=(DisplayName="On Rotation Blocked"))
+    void ReceiveRotationBlocked(UPrimitiveComponent* MovingComponent, FName BoneName);
+    virtual void ReceiveRotationBlocked_Implementation(
+        UPrimitiveComponent* MovingComponent, FName BoneName);
+
+    UFUNCTION(BlueprintNativeEvent, Category="Mechanism|Events",
         meta=(DisplayName="Start Rotating"))
     void ReceiveStartRotating(
         UPrimitiveComponent* MovingComponent, FName BoneName);
@@ -625,6 +656,7 @@ protected:
     virtual void UninitializeComponent() override;
     virtual void OnRegister() override;
     virtual void OnUnregister() override;
+    virtual void OnCreatePhysicsState() override;
     virtual void TickComponent(
         float DeltaTime,
         ELevelTick TickType,
@@ -646,6 +678,7 @@ private:
     void ReleaseCollisionPairPolicy(bool bUnsubscribe);
     UFUNCTION()
     void HandleCollisionPairPhysicsState(UPrimitiveComponent* Component, EComponentPhysicsStateChange Change);
+    friend struct FMechanismActuatorAngularTestAccess;
     // One scope protects managed bodies and suppresses internal motion callbacks.
     struct FPhysicsTransitionScope
     {
@@ -732,9 +765,10 @@ private:
     void ArmAngularTargetStoppedEvent();
     void ArmAngularTargetHardStop();
     bool TryForceStopAtAngularTarget();
+    bool UpdateAngularPositionMotion(float DeltaTime);
     void CompleteAngularPositionMotion(
         UPrimitiveComponent* MovingComponent, FName BoneName,
-        bool bForceFreeze);
+        bool bForceFreeze, bool bReachedTarget = true);
     void BroadcastStartRotating();
     void PrepareInitialLinearEnd();
 
@@ -762,7 +796,10 @@ private:
     float DesiredAngularPositionTargetDegrees = 0.0f;
     bool bAngularSpeedTargetInitialized = false;
     bool bAngularTargetHardStopArmed = false;
-    float InitialAngularTargetErrorDegrees = 0.0f;
+    bool bAngularProgressInitialized = false;
+    float MonitoredAngularTargetDegrees = 0.0f;
+    float BestAngularErrorDegrees = 0.0f;
+    float AngularNoProgressSeconds = 0.0f;
     bool bWaitingForLinearMotionStop = false;
     bool bWaitingForAngularTargetStop = false;
     bool bLinearEndCommandActive = false;

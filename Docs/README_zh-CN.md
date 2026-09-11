@@ -123,7 +123,7 @@ On Leave From Retract End，再向 Extend End 运动。
 - Open Angle Degrees 设置打开角度；
 - Angular Max Speed：0 表示保持旧版的瞬时目标，正数表示目标最大推进角速度，单位 deg/s；
 - Force Stop At Angular Target：默认关闭；需要到达目标角度立即冻结时再开启；
-- Angular Target Stop Tolerance：强制停止的角度容差，默认 0.5 度；
+- Angular Target Stop Tolerance：实际到位容差（强制停止也使用此值），默认 0.5 度；
 - 其他两个角轴和全部线性轴自动锁定。
 
 调用 Open、Close、Toggle 或 Set Actuator Active(bool)。
@@ -142,14 +142,28 @@ Set Angular Position Percent 在下达新角度前都会自动 Unfreeze，随后
 **Start Rotating**。
 
 开启 **Force Stop At Angular Target** 后，命令运行期间会持续读取所选 Twist/Swing
-约束角度。实际角度进入容差或越过目标时，组件会触发 **On Rotate To End** 与兼容的
+约束角度。实际角度进入容差时，组件会触发 **On Rotate To End** 与
 **On Rotate To Target**，清零角速度并立即冻结当前姿态，防止驱动继续越过
 Open/Close/Alpha 目标。下一条 Angular Position 命令会自动 Unfreeze。
 
-如果夹爪在目标前被物体或障碍卡住，刚体进入 Sleep/Stopped 时同样触发上述结束
-事件，不要求实际角度到达目标。启用 **Freeze On Rotation Stopped** 后会冻结在
-被阻挡的位置。所有旋转事件都会给出活动组件与 Bone Name，同时支持详情面板绑定
-和 BlueprintNativeEvent 覆写。
+越过目标但仍在容差外时不再直接冻结，避免把偏差姿态固定下来。
+未启用 Force Stop 时，等待实际角度进入容差并自然停止／休眠。
+
+### 小角度微调与受阻处理
+
+- 75→76→77→78 这类小幅指令若提前触发物理休眠，组件会在 Tick 中重新唤醒并继续检查实际角度；不会将休眠直接当成到位，也不修改全局休眠、质量、材质或驱动力参数。
+- **Angular Target Stop Tolerance**：实际到位容差，默认 0.5°，现在对所有角度位置指令生效。需要更精细定位时可以设为 0.1°。
+- **Angular Stall Timeout**：Angular Position 的高级参数，默认 1 秒。持续这段时间角度误差没有有效改善，就判定为受阻／无进展。慢速指令会相应降低进展判定阈值，重复发送同一目标不会重置正在计时的检测。
+- **On Rotate To Target**：只在实际到位时触发；不再表示中途受阻。
+- **On Rotation Blocked**：无进展超时触发。此时停止位置驱动的持续推力，但保留约束限位和速度阻尼；新指令会恢复驱动并重试。移除障碍后需重新下达指令。
+- **On Rotate To End**：保留为兼容的动作结束事件，到位和确认受阻都触发。原来用于“任何停止”的逻辑继续接此事件，真正的到位联锁请接 On Rotate To Target。
+- 蓝图可读取 **Angular Target Reached** / **Angular Motion Blocked**，表示最近一条指令的结果，不是持续测量的姿态传感器；新指令清除结果。
+
+受阻判断依据“无进展”，不是碰撞传感器；驱动力不足或目标超出物理限位也可能触发。
+启用 **Freeze On Rotation Stopped** 时，会在确认到位或受阻并发送事件后冻结。
+所有旋转事件都会给出活动组件与 Bone Name，同时支持详情面板绑定和 BlueprintNativeEvent 覆写。
+
+自动回归测试：`Automation RunTests MechanismActuator.Angular`。测试使用临时隔离物理世界，不加载设备地图、不连接 PLC。
 
 ## 转盘模式
 

@@ -246,7 +246,7 @@ public:
         EditConditionHides, ClampMin="0.0", Units="cm/s",
         Delta="1.0", WheelStep="1.0",
         DisplayName="Linear Max Speed"))
-    float LinearMaxSpeedCmPerSecond = 0.0f;
+    float LinearMaxSpeedCmPerSecond = 5.0f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Linear Drive",
         meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition",
@@ -383,25 +383,48 @@ public:
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Freeze",
         meta=(DisplayName="Start Frozen", EditCondition="bChildSimulatePhysics"))
-    bool bStartFrozen = false;
+    bool bStartFrozen = true;
+
+    /** Freeze after sustained low world-space linear speed, independently of Chaos sleep.
+     * Uses the existing completion/freeze path. Angular speed is NOT checked.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Freeze",
+        meta=(DisplayName="Force Sleep"))
+    bool bEnableForceSleep = false;
+
+    /** Strict upper bound on the moving body's world-space linear speed, in cm/s.
+     * Zero disables triggering. Does not measure angular or parent-relative speed.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Freeze",
+        meta=(DisplayName="Force Freeze Max Linear Speed", EditCondition="bEnableForceSleep",
+        ClampMin="0.0", Units="cm/s"))
+    float ForceFreezeMaxLinearSpeedCmPerSecond = 1.0f;
+
+    /** Consecutive simulation seconds below the speed threshold; resets on a new command.
+     * Zero freezes on the first qualifying sample. Uses no timer.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Freeze",
+        meta=(DisplayName="Force Freeze Duration", EditCondition="bEnableForceSleep",
+        ClampMin="0.0", Units="s"))
+    float ForceFreezeDuration = 0.5f;
 
     /** Freeze the moving child after the Extend To End events are sent. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Freeze",
         meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition",
         DisplayName="Freeze On Extend To End"))
-    bool bFreezeOnExtendToEnd = false;
+    bool bFreezeOnExtendToEnd = true;
 
     /** Freeze the moving child after the Retract To End events are sent. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Freeze",
         meta=(EditCondition="Mode == EMechanismActuatorMode::LinearPosition",
         DisplayName="Freeze On Retract To End"))
-    bool bFreezeOnRetractToEnd = false;
+    bool bFreezeOnRetractToEnd = true;
 
     /** Freeze after angular completion (target reached or confirmed stall) events are sent. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Freeze",
         meta=(EditCondition="Mode == EMechanismActuatorMode::AngularPosition",
         DisplayName="Freeze On Rotation Stopped"))
-    bool bFreezeOnRotationStopped = false;
+    bool bFreezeOnRotationStopped = true;
 
     /** Enables high-frequency endpoint and position-alpha command diagnostics. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Debug",
@@ -693,6 +716,15 @@ private:
     };
     int32 PhysicsTransitionDepth = 0;
     uint64 MotionCommandRevision = 0;
+    // Independent frame-end monitor: never depends on drive tick or debug logging.
+    FDelegateHandle ForceSleepTickHandle;
+    TWeakObjectPtr<UPrimitiveComponent> ForceSleepTrackedBody;
+    float ForceSleepElapsed = 0.0f;
+    void StartForceSleepMonitoring();
+    void StopForceSleepMonitoring();
+    void ResetForceSleepTracking();
+    void ObserveForceSleepAtFrameEnd(UWorld* World, ELevelTick TickType, float DeltaSeconds);
+    void UpdateForceSleep(float DeltaSeconds);
     // Invalidates deferred initialization work across commands/lifecycle changes.
     uint64 StartFrozenRequestRevision = 0;
     bool bStartFrozenPending = false;
@@ -769,6 +801,8 @@ private:
     void CompleteAngularPositionMotion(
         UPrimitiveComponent* MovingComponent, FName BoneName,
         bool bForceFreeze, bool bReachedTarget = true);
+    void CompleteLinearPositionMotion(
+        UPrimitiveComponent* MovingComponent, FName BoneName, bool bForceFreeze);
     void BroadcastStartRotating();
     void PrepareInitialLinearEnd();
 

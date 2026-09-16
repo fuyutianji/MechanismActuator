@@ -107,12 +107,14 @@ void UMechanismActuatorComponent::InitializeComponent()
     if (World && World->IsGameWorld())
     {
         StartSleepDiagnostics();
+        StartForceSleepMonitoring();
         TryCompleteStartFrozenInitialization();
     }
 }
 
 void UMechanismActuatorComponent::UninitializeComponent()
 {
+    StopForceSleepMonitoring();
     StopSleepDiagnostics();
     ReleaseCollisionPairPolicy(true);
     ++StartFrozenRequestRevision;
@@ -137,6 +139,20 @@ void UMechanismActuatorComponent::UninitializeComponent()
     SetComponentFrozen(false);
     bHasSavedConstraintState = false;
     Super::UninitializeComponent();
+}
+
+void UMechanismActuatorComponent::ObserveForceSleepAtFrameEnd(
+    UWorld* World, ELevelTick TickType, float DeltaSeconds)
+{
+    if (World != GetWorld()) { return; }
+    if (!bEnableForceSleep || !IsRegistered() || !HasBeenInitialized()
+        || !World || !World->HasBegunPlay() || World->IsPaused()
+        || TickType != LEVELTICK_All || !IsMechanismControlAllowed(this))
+    {
+        ResetForceSleepTracking();
+        return;
+    }
+    UpdateForceSleep(DeltaSeconds);
 }
 
 void UMechanismActuatorComponent::TickComponent(
@@ -585,6 +601,7 @@ void UMechanismActuatorComponent::TryCompleteStartFrozenInitialization()
 bool UMechanismActuatorComponent::ReinitializeActuator()
 {
     if (!IsMechanismControlAllowed(this)) return false;
+    ResetForceSleepTracking();
     ++StartFrozenRequestRevision;
     if (bComponentFrozen)
     {
@@ -1555,7 +1572,13 @@ void UMechanismActuatorComponent::HandleMovingComponentSleep(
         return;
     }
 
-    if (!bWaitingForLinearMotionStop
+    CompleteLinearPositionMotion(SleepingComponent, BoneName, false);
+}
+
+void UMechanismActuatorComponent::CompleteLinearPositionMotion(
+    UPrimitiveComponent* SleepingComponent, const FName BoneName, const bool bForceFreeze)
+{
+    if (!IsValid(SleepingComponent) || !bWaitingForLinearMotionStop
         || Mode != EMechanismActuatorMode::LinearPosition)
     {
         return;
@@ -1572,14 +1595,16 @@ void UMechanismActuatorComponent::HandleMovingComponentSleep(
     if (ReachedLinearEnd == EMechanismLinearState::Extended)
     {
         ReceiveExtendToEnd(SleepingComponent, BoneName);
+        if (CompletedCommand != MotionCommandRevision) { return; }
         OnExtendToEnd.Broadcast(SleepingComponent, BoneName);
-        bFreezeAtReachedEnd = bFreezeOnExtendToEnd;
+        bFreezeAtReachedEnd = bForceFreeze || bFreezeOnExtendToEnd;
     }
     else
     {
         ReceiveRetractToEnd(SleepingComponent, BoneName);
+        if (CompletedCommand != MotionCommandRevision) { return; }
         OnRetractToEnd.Broadcast(SleepingComponent, BoneName);
-        bFreezeAtReachedEnd = bFreezeOnRetractToEnd;
+        bFreezeAtReachedEnd = bForceFreeze || bFreezeOnRetractToEnd;
     }
 
     if (bLogFrequentActuatorDrivenEvents)
@@ -1703,6 +1728,7 @@ void UMechanismActuatorComponent::ReceiveRotateToEnd_Implementation(
 
 void UMechanismActuatorComponent::SetComponentFrozen(const bool bFrozen)
 {
+    ResetForceSleepTracking();
     bComponentFrozen = bFrozen;
     bComponentSleepFrozen = bFrozen;
 }
@@ -1891,6 +1917,7 @@ void UMechanismActuatorComponent::ApplyCurrentState()
 void UMechanismActuatorComponent::SetActuatorActive(const bool bActive)
 {
     if (!IsMechanismControlAllowed(this)) return;
+    ResetForceSleepTracking();
     ++MotionCommandRevision;
     UE_CLOG(bLogActuatorOperations, LogMechanismActuator, Log,
         TEXT("[ActuatorDriven] Position command received: Actuator='%s', Mode=%s, RequestedActive=%s, PreviousActive=%s, Frozen=%s, ConstraintValid=%s, ConstraintTerminated=%s."),
@@ -1984,6 +2011,7 @@ void UMechanismActuatorComponent::Close()
 void UMechanismActuatorComponent::SetPositionAlpha(float Alpha)
 {
     if (!IsMechanismControlAllowed(this)) return;
+    ResetForceSleepTracking();
     ++MotionCommandRevision;
     if (bLogFrequentActuatorDrivenEvents)
     {

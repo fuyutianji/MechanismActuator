@@ -1931,12 +1931,14 @@ void UMechanismActuatorComponent::SetActuatorActive(const bool bActive)
     const bool bUsesPositionTarget =
         Mode == EMechanismActuatorMode::LinearPosition
         || Mode == EMechanismActuatorMode::AngularPosition;
-    if (bUsesPositionTarget
+    const bool bStartsAngularVelocity =
+        Mode == EMechanismActuatorMode::AngularVelocity && bActive;
+    if ((bUsesPositionTarget || bStartsAngularVelocity)
         && bComponentFrozen
         && !UnfreezeComponentInternal())
     {
         UE_LOG(LogMechanismActuator, Warning,
-            TEXT("%s: Position command was cancelled because the frozen moving component could not be restored."),
+            TEXT("%s: Motion command was cancelled because the frozen moving component could not be restored."),
             *GetPathName());
         return;
     }
@@ -2139,6 +2141,16 @@ void UMechanismActuatorComponent::RotateClockwise()
         return;
     }
 
+    ResetForceSleepTracking();
+    ++MotionCommandRevision;
+    if (bComponentFrozen && !UnfreezeComponentInternal())
+    {
+        UE_LOG(LogMechanismActuator, Warning,
+            TEXT("%s: Rotate Clockwise was cancelled because the frozen moving component could not be restored."),
+            *GetPathName());
+        return;
+    }
+
     float Direction = bReverseAngularDirection ? 1.0f : -1.0f;
     SetAngularVelocityTarget(MakeAngularVelocityTarget(
         Direction * AngularSpeedDegreesPerSecond / 360.0f));
@@ -2153,6 +2165,16 @@ void UMechanismActuatorComponent::RotateCounterClockwise()
     if (!IsMechanismControlAllowed(this)) return;
     if (Mode != EMechanismActuatorMode::AngularVelocity)
     {
+        return;
+    }
+
+    ResetForceSleepTracking();
+    ++MotionCommandRevision;
+    if (bComponentFrozen && !UnfreezeComponentInternal())
+    {
+        UE_LOG(LogMechanismActuator, Warning,
+            TEXT("%s: Rotate Counter Clockwise was cancelled because the frozen moving component could not be restored."),
+            *GetPathName());
         return;
     }
 

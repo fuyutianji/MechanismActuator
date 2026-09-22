@@ -3,6 +3,7 @@
 #include "MechanismActuatorComponent.h"
 #include "MechanismActuatorLog.h"
 #include "MechanismConstraintDiagnostics.h"
+#include "MechanismConstraintLifecycle.h"
 #include "MechanismSleepDiagnosticsSubsystem.h"
 
 #include "Components/PrimitiveComponent.h"
@@ -68,6 +69,7 @@ void UMechanismActuatorComponent::OnCreatePhysicsState()
         USceneComponent::OnCreatePhysicsState();
         return;
     }
+    MechanismConstraintLifecycle::FDeferredCreationScope DeferredCreation(*this);
     Super::OnCreatePhysicsState();
 }
 
@@ -79,27 +81,20 @@ void UMechanismActuatorComponent::InitializeComponent()
         return;
     }
     UWorld* World = GetWorld();
+    {
+        // Native initialization must not create a joint before MA has applied
+        // child physics overrides and validated both independent body handles.
+        MechanismConstraintLifecycle::FDeferredCreationScope DeferredCreation(*this);
+        Super::InitializeComponent();
+    }
 
 #if WITH_EDITOR
     if (!World || !World->IsGameWorld())
     {
-        // The base implementation calls InitComponentConstraint directly.
-        // Prevent that call from resolving preview bodies.
-        const FName PreviewComponentName1 = ComponentName1.ComponentName;
-        const FName PreviewComponentName2 = ComponentName2.ComponentName;
-        ComponentName1.ComponentName = NAME_None;
-        ComponentName2.ComponentName = NAME_None;
-
-        Super::InitializeComponent();
-
-        ComponentName1.ComponentName = PreviewComponentName1;
-        ComponentName2.ComponentName = PreviewComponentName2;
         SyncEditorConstraintPreview();
         return;
     }
 #endif
-
-    Super::InitializeComponent();
 
     if (bAutoInitialize && World && World->IsGameWorld())
     {
@@ -284,28 +279,28 @@ void UMechanismActuatorComponent::OnRegister()
         USceneComponent::OnRegister();
         return;
     }
-#if WITH_EDITOR
+    {
+        // UE's editor registration path can create constraints before component
+        // initialization. Preserve its lifecycle/visualizer work, but defer joints.
+        MechanismConstraintLifecycle::FDeferredCreationScope DeferredCreation(*this);
+        Super::OnRegister();
+    }
+
     UWorld* World = GetWorld();
+#if WITH_EDITOR
     if (!World || !World->IsGameWorld())
     {
-        // UPhysicsConstraintComponent::OnRegister creates a live constraint when
-        // body names are present. Hide the preview-only references until the base
-        // registration has finished, then restore them for its visualizer.
-        const FName PreviewComponentName1 = ComponentName1.ComponentName;
-        const FName PreviewComponentName2 = ComponentName2.ComponentName;
-        ComponentName1.ComponentName = NAME_None;
-        ComponentName2.ComponentName = NAME_None;
-
-        Super::OnRegister();
-
-        ComponentName1.ComponentName = PreviewComponentName1;
-        ComponentName2.ComponentName = PreviewComponentName2;
         SyncEditorConstraintPreview();
         return;
     }
 #endif
 
-    Super::OnRegister();
+    // Initial registration leaves creation to InitializeActuator. Re-registration
+    // of a live actuator uses the same validated rebuild path instead of native init.
+    if (World && World->IsGameWorld())
+    {
+        RestoreConstraintAfterRegistration();
+    }
     RefreshCollisionPairPolicy();
     StartSleepDiagnostics();
 }
@@ -689,6 +684,19 @@ bool UMechanismActuatorComponent::ConfigureConstraintForBodies(
         MechanismConstraintDiagnostics::LogEndpoint(this, Phase, TEXT("Child"), Child, ChildBoneName);
         return false;
     }
+    // Different components must also resolve to different Chaos actors. Keep this
+    // check immediately before the only MA-owned native constraint creation call.
+    if (ParentBodyBefore->GetPhysicsActorHandle() == ChildBodyBefore->GetPhysicsActorHandle())
+    {
+        UE_LOG(LogMechanismActuator, Error,
+            TEXT("[ActuatorDriven] Constraint rebuild rejected: SamePhysicsActor. Actuator='%s' Phase=%s Frame=%llu Parent='%s' Child='%s'"),
+            *GetPathName(), Phase, static_cast<uint64>(GFrameCounter),
+            *GetPathNameSafe(Parent), *GetPathNameSafe(Child));
+        MechanismConstraintDiagnostics::LogEndpoint(this, Phase, TEXT("Parent"), Parent, ParentBoneName);
+        MechanismConstraintDiagnostics::LogEndpoint(this, Phase, TEXT("Child"), Child, ChildBoneName);
+        return false;
+    }
+
     UE_CLOG(bLogActuatorOperations, LogMechanismActuator, Log,
         TEXT("[ActuatorDriven] Constraint rebuild started: Actuator='%s', Mode=%s, Parent='%s', ParentBone='%s', ParentSimulating=%s, ParentPhysicsState=%s, ParentBodyValid=%s, Child='%s', ChildBone='%s', ChildSimulating=%s, ChildPhysicsState=%s, ChildBodyValid=%s, ConstraintValidBefore=%s, ConstraintTerminatedBefore=%s."),
         *GetPathName(),

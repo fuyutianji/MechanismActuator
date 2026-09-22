@@ -763,6 +763,8 @@ private:
     void ConfigureAngularVelocity();
     bool EnsureConstraintFrameOnParent(
         UPrimitiveComponent* Parent, UPrimitiveComponent* Child);
+    // Re-registration preserves live targets and never reapplies initial child overrides.
+    void RestoreConstraintAfterRegistration();
     bool ConfigureConstraintForBodies(
         UPrimitiveComponent* Parent, UPrimitiveComponent* Child, const TCHAR* Phase);
     void CaptureDependentConstraintSnapshots(

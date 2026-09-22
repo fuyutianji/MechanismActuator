@@ -49,6 +49,11 @@ git -C Plugins/MechanismActuator pull origin main
 
    每个组件生命周期第一次成功初始化时会应用以上物理与重力设置。之后重复调用
    Initialize Actuator 会被忽略，不会覆盖游戏逻辑在运行时所做的修改。
+
+   注册和组件初始化期间暂不创建物理约束，待 Initialize Actuator 应用子组件物理设置，
+   并确认两端具有不同的独立刚体后再创建。关闭 Auto Initialize 时，仅注册组件不会创建约束。
+   已初始化且未冻结的 MA 重新注册时，也会通过端点检查后恢复约束，并保留参考坐标和驱动目标。
+   已焊接到其他刚体的 Parent 仍会被拒绝；应选择实际刚体根组件，或将该 Parent 配置为独立刚体。
 7. Disable Collision 默认开启，父端和子端不会互相碰撞。
 
 ## 直线模式

@@ -79,6 +79,14 @@ Then:
    These settings are applied during the first successful initialization of
    each component lifecycle. Later runtime physics and gravity changes are not
    overwritten by duplicate Initialize Actuator calls.
+
+   Native registration and component initialization defer joint creation until
+   Initialize Actuator has applied child physics settings and validated two
+   distinct, independent rigid bodies. With Auto Initialize disabled, registration
+   alone does not create a joint. Re-registering an initialized, unfrozen actuator
+   rebuilds through the same validation while preserving joint frames and targets.
+   A Parent welded to another body is still rejected; select the actual rigid-body
+   root or configure that Parent as an independent body.
 7. Compile the Blueprint.
 
 The dropdowns intentionally only show primitive components owned by the same Blueprint/Actor. They do not require manually typing a Static Mesh component name.

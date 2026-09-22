@@ -120,8 +120,8 @@ public:
         meta=(DeprecatedProperty, DeprecationMessage="Use Disable Auto Welding and Disable Inertia Conditioning instead."))
     bool bMaintainBarycenter = false;
 
-    /** On initialization, disable auto welding and unweld primitive descendants.
-     * The configured Child itself is unchanged. Off preserves existing settings.
+    /** On initialization, disable auto welding and unweld the configured Child
+     * and all primitive descendants. Off preserves existing settings.
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Child Physics",
         meta=(DisplayName="Disable Auto Welding"))
@@ -764,7 +764,7 @@ private:
     bool EnsureConstraintFrameOnParent(
         UPrimitiveComponent* Parent, UPrimitiveComponent* Child);
     bool ConfigureConstraintForBodies(
-        UPrimitiveComponent* Parent, UPrimitiveComponent* Child);
+        UPrimitiveComponent* Parent, UPrimitiveComponent* Child, const TCHAR* Phase);
     void CaptureDependentConstraintSnapshots(
         UPrimitiveComponent* RecreatedBody,
         TArray<FDependentConstraintSnapshot>& OutSnapshots) const;

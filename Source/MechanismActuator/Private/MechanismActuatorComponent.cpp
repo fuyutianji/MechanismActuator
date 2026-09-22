@@ -1,7 +1,8 @@
-// Implements actuator setup/commands, recursive descendant-physics overrides,
+// Implements actuator setup/commands, child/descendant physics overrides,
 // drive targets/events, freeze restoration, and dependent-joint preservation.
 #include "MechanismActuatorComponent.h"
 #include "MechanismActuatorLog.h"
+#include "MechanismConstraintDiagnostics.h"
 #include "MechanismSleepDiagnosticsSubsystem.h"
 
 #include "Components/PrimitiveComponent.h"
@@ -384,7 +385,7 @@ void UMechanismActuatorComponent::ApplyChildPhysicsOverridesRecursively(
         *GetPathName(), *Child->GetName(), Descendants.Num(), bStartFrozen);
     LogMechanismChainState(TEXT("Initialize.BeforeRecursiveOverrides"));
 
-    const auto DisablePhysicsOptions = [this](UPrimitiveComponent* Primitive)
+    const auto DisablePhysicsOptions = [this, Child](UPrimitiveComponent* Primitive)
     {
         if (!IsValid(Primitive))
         {
@@ -408,7 +409,8 @@ void UMechanismActuatorComponent::ApplyChildPhysicsOverridesRecursively(
             }
         }
 
-        if (bDisableInertiaConditioning)
+        const bool bDisablePrimitiveInertia = bDisableInertiaConditioning && Primitive != Child;
+        if (bDisablePrimitiveInertia)
         {
             Primitive->BodyInstance.SetInertiaConditioningEnabled(false);
         }
@@ -419,7 +421,7 @@ void UMechanismActuatorComponent::ApplyChildPhysicsOverridesRecursively(
             LiveBody && LiveBody != &Primitive->BodyInstance)
         {
             if (bDisableAutoWelding) LiveBody->bAutoWeld = false;
-            if (bDisableInertiaConditioning) LiveBody->SetInertiaConditioningEnabled(false);
+            if (bDisablePrimitiveInertia) LiveBody->SetInertiaConditioningEnabled(false);
         }
         UE_CLOG(bLogActuatorOperations, LogMechanismActuator, Log,
             TEXT("[ActuatorDriven][InitOverride] After Source='%s' Target='%s' InertiaConditioning=%d AutoWeld=%d Welded=%d UnweldRequested=%d"),
@@ -427,12 +429,16 @@ void UMechanismActuatorComponent::ApplyChildPhysicsOverridesRecursively(
             Primitive->BodyInstance.bAutoWeld, Primitive->IsWelded(), bDisableAutoWelding && bWeldedBefore);
     };
 
-    // Process only descendants, deepest first. The configured Child's own
-    // inertia-conditioning, auto-weld, and current weld state stay unchanged.
+    // Process descendants before their root, preserving the Child's own
+    // inertia conditioning while disabling welding throughout the subtree.
     for (int32 Index = Descendants.Num() - 1; Index >= 0; --Index)
     {
         DisablePhysicsOptions(
             Cast<UPrimitiveComponent>(Descendants[Index]));
+    }
+    if (bDisableAutoWelding)
+    {
+        DisablePhysicsOptions(Child);
     }
     LogMechanismChainState(TEXT("Initialize.AfterRecursiveOverrides"));
 }
@@ -528,7 +534,7 @@ bool UMechanismActuatorComponent::InitializeActuator()
         LogMechanismChainState(TEXT("Initialize.AfterSetSimulatePhysics"));
         Child->SetEnableGravity(bChildEnableGravity);
 
-        if (!ConfigureConstraintForBodies(Parent, Child))
+        if (!ConfigureConstraintForBodies(Parent, Child, TEXT("Initialize")))
         {
             UnbindMovingComponentEvents();
             return false;
@@ -652,13 +658,16 @@ bool UMechanismActuatorComponent::EnsureConstraintFrameOnParent(
 }
 
 bool UMechanismActuatorComponent::ConfigureConstraintForBodies(
-    UPrimitiveComponent* Parent, UPrimitiveComponent* Child)
+    UPrimitiveComponent* Parent, UPrimitiveComponent* Child, const TCHAR* Phase)
 {
     if (!IsValid(Parent) || !IsValid(Child) || Parent == Child)
     {
         UE_LOG(LogMechanismActuator, Error,
-            TEXT("%s: Cannot configure constraint with invalid bodies."),
-            *GetPathName());
+            TEXT("[ActuatorDriven] Constraint rebuild rejected: invalid component selection. Actuator='%s' Phase=%s Frame=%llu Parent='%s' Child='%s' SameComponent=%d"),
+            *GetPathName(), Phase, static_cast<uint64>(GFrameCounter),
+            *GetPathNameSafe(Parent), *GetPathNameSafe(Child), Parent == Child);
+        MechanismConstraintDiagnostics::LogEndpoint(this, Phase, TEXT("Parent"), Parent, ParentBoneName);
+        MechanismConstraintDiagnostics::LogEndpoint(this, Phase, TEXT("Child"), Child, ChildBoneName);
         return false;
     }
 
@@ -672,8 +681,12 @@ bool UMechanismActuatorComponent::ConfigureConstraintForBodies(
         || ParentBodyBefore->WeldParent || ChildBodyBefore->WeldParent)
     {
         UE_LOG(LogMechanismActuator, Error,
-            TEXT("[ActuatorDriven] Constraint rebuild rejected: missing or welded endpoint. Actuator='%s', Parent='%s', Child='%s'."),
-            *GetPathName(), *GetPathNameSafe(Parent), *GetPathNameSafe(Child));
+            TEXT("[ActuatorDriven] Constraint rebuild rejected: missing or welded endpoint. Actuator='%s' Phase=%s Frame=%llu Parent='%s' Child='%s' ActuatorInitialized=%d Frozen=%d DisableAutoWelding=%d ChildSimulatePhysics=%d"),
+            *GetPathName(), Phase, static_cast<uint64>(GFrameCounter),
+            *GetPathNameSafe(Parent), *GetPathNameSafe(Child),
+            bActuatorInitialized, bComponentFrozen, bDisableAutoWelding, bChildSimulatePhysics);
+        MechanismConstraintDiagnostics::LogEndpoint(this, Phase, TEXT("Parent"), Parent, ParentBoneName);
+        MechanismConstraintDiagnostics::LogEndpoint(this, Phase, TEXT("Child"), Child, ChildBoneName);
         return false;
     }
     UE_CLOG(bLogActuatorOperations, LogMechanismActuator, Log,
@@ -887,7 +900,7 @@ bool UMechanismActuatorComponent::RestoreDependentConstraintSnapshots(
             RecreatedBody, NAME_None);
         DependentActuator->LogSleepDiagnostic(TEXT("Dependency.BeforeRestore"));
         const bool bConfigured = DependentActuator->ConfigureConstraintForBodies(
-            DependentParent, DependentChild);
+            DependentParent, DependentChild, TEXT("DependencyRestore"));
         const bool bConstraintReady = bConfigured
             && DependentActuator->ConstraintInstance.IsValidConstraintInstance()
             && !DependentActuator->ConstraintInstance.IsTerminated();
@@ -2553,7 +2566,7 @@ bool UMechanismActuatorComponent::UnfreezeComponentInternal()
     }
 
     LogMechanismChainState(TEXT("Unfreeze.BeforeConfigureConstraint"));
-    if (!ConfigureConstraintForBodies(Parent, Child))
+    if (!ConfigureConstraintForBodies(Parent, Child, TEXT("Unfreeze")))
     {
         LogMechanismChainState(TEXT("Unfreeze.ConfigureConstraintFailed"));
         // Do not leave a free dynamic child after a failed thaw. Preserve the

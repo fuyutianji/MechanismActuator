@@ -8,7 +8,8 @@ Reusable Unreal Engine C++ physics actuator component for industrial mechanisms.
 - Parent and child are selected from dropdowns built from the current Blueprint component tree.
 - Parent simulation, gravity and mobility are left unchanged.
 - Child simulation, gravity and optional Movable mobility are exposed.
-- Maintain Barycenter recursively disables inertia conditioning and auto weld on primitive descendants during initialization while preserving the configured Child's own settings.
+- Disable Auto Welding disables auto weld and removes existing welds on the configured Child and all primitive descendants during initialization.
+- Disable Inertia Conditioning applies only to primitive descendants, preserving the configured Child's own inertia conditioning.
 - Parent/child collision is disabled by default.
 - Four modes:
   - **Linear Position**: cylinders, slides and gripper fingers.
@@ -70,8 +71,10 @@ Then:
    - Force Child Movable: true
    - Child Simulate Physics: true
    - Child Enable Gravity: false
-   - Maintain Barycenter: enabled by default; recursively disables both options
-     only on attached primitive descendants. The configured Child remains unchanged.
+   - Disable Auto Welding: enable to disable auto weld and remove existing welds
+     on the configured Child and all attached primitive descendants.
+   - Disable Inertia Conditioning: optionally disable inertia conditioning on
+     attached primitive descendants only. The configured Child remains unchanged.
 
    These settings are applied during the first successful initialization of
    each component lifecycle. Later runtime physics and gravity changes are not

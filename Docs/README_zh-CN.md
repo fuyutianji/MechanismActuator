@@ -42,8 +42,10 @@ git -C Plugins/MechanismActuator pull origin main
    - Force Child Movable：开启；
    - Child Simulate Physics：开启；
    - Child Enable Gravity：关闭；
-   - Maintain Barycenter：默认开启；初始化时只递归关闭 Child 下方 Primitive 子组件的
-     Inertia Conditioning 和 Auto Weld，并解除这些子组件已有的焊接。Child 自身保持不变。
+   - Disable Auto Welding：开启后，初始化时关闭 Child 自身及其下方所有 Primitive 子组件的
+     Auto Weld，并解除这些组件已有的焊接。
+   - Disable Inertia Conditioning：按需开启，仅关闭 Child 下方 Primitive 子组件的
+     Inertia Conditioning，Child 自身的惯性调节设置保持不变。
 
    每个组件生命周期第一次成功初始化时会应用以上物理与重力设置。之后重复调用
    Initialize Actuator 会被忽略，不会覆盖游戏逻辑在运行时所做的修改。

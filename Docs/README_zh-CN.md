@@ -156,6 +156,37 @@ Open/Close/Alpha 目标。下一条 Angular Position 命令会自动 Unfreeze。
 越过目标但仍在容差外时不再直接冻结，避免把偏差姿态固定下来。
 未启用 Force Stop 时，等待实际角度进入容差并自然停止／休眠。
 
+### 旋转端点信号（PLC）
+
+Angular Position 可以直接复用原来的四个事件，不需要重新创建蓝图节点：
+
+| 事件 | 旋转模式含义 | PLC 到位信号 |
+| --- | --- | --- |
+| On Retract To End | 实际角度进入 Closed Angle Degrees 容差 | 原位 = true |
+| On Leave From Retract End | 实际角度离开 Closed 容差加回差 | 原位 = false |
+| On Extend To End | 实际角度进入 Open Angle Degrees 容差 | 动作位 = true |
+| On Leave From Extend End | 实际角度离开 Open 容差加回差 | 动作位 = false |
+
+例如 Closed = 0°、Open = 90°，到 0°报缩回到位，到 90°报伸出到位。
+适用于 Twist X、Swing1 Z、Swing2 Y，以及 Reverse Angular Direction。
+Twist X／Swing2 Y 的物理角度反馈已转换为与驱动目标一致的 Roll／Pitch 符号，
+避免实际已转到目标却误判未到位。现有 Open／Closed 数值和运动方向无需修改。
+到位使用 **Angular Target Stop Tolerance**（默认 0.5°）；离位需超过此容差加
+**Angular Endpoint Hysteresis**（高级参数，默认 0.25°），避免微小抖动反复发送信号。
+两端检测范围重叠时保留已占用端点，否则取最近端点，避免两个到位信号同时为 true；
+短角度行程应相应减小容差和回差。
+
+事件只在实际状态变化时发送一次；下达命令、唤醒、休眠或中途受阻均不代表到位／离位。
+中间角度正常到位仍用 On Rotate To Target，受阻用 On Rotation Blocked。
+端点检测在未冻结时持续读取角度，但不会为此唤醒刚体或重新开启受阻驱动。
+冻结时保留端点状态；再次启动后，真正离开端点才发送离位事件。
+Angular Velocity 连续转盘没有固定端点，不触发这四个事件；直线模式原有语义不变。
+
+初始化只记录当前实际端点，不提前发送游戏事件。需要初始化 PLC 输入时，在 PLC
+连接成功且执行器初始化完成后，读取 **At Angular Retract End** 和
+**At Angular Extend End** 分别发布原位／动作位状态，再由上述四个事件更新。
+这两个状态在冻结或约束无效时保留最近有效测量，不用于判定约束本身是否有效。
+
 ### 小角度微调与受阻处理
 
 - 75→76→77→78 这类小幅指令若提前触发物理休眠，组件会在 Tick 中重新唤醒并继续检查实际角度；不会将休眠直接当成到位，也不修改全局休眠、质量、材质或驱动力参数。

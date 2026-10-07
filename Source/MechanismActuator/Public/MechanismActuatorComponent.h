@@ -203,6 +203,12 @@ public:
         DisplayName="Angular Target Stop Tolerance"))
     float AngularTargetStopToleranceDegrees = 0.5f;
 
+    /** Extra angular error required to leave an endpoint, preventing noisy PLC sensor transitions. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Angular Position", AdvancedDisplay,
+        meta=(EditCondition="Mode == EMechanismActuatorMode::AngularPosition", EditConditionHides,
+        ClampMin="0.0", Units="deg", DisplayName="Angular Endpoint Hysteresis"))
+    float AngularEndpointHysteresisDegrees = 0.25f;
+
     /** Time without progress toward an angular target before reporting blocked and releasing position drive. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Angular Position", AdvancedDisplay,
         meta=(EditCondition="Mode == EMechanismActuatorMode::AngularPosition", EditConditionHides,
@@ -354,6 +360,14 @@ public:
     UPROPERTY(BlueprintReadOnly, Transient, Category="Mechanism|Runtime|State")
     bool bAngularMotionBlocked = false;
 
+    /** Actual Closed endpoint sensor, initialized without an event and retained while frozen. */
+    UPROPERTY(BlueprintReadOnly, Transient, Category="Mechanism|Runtime|State")
+    bool bAtAngularRetractEnd = false;
+
+    /** Actual Open endpoint sensor, initialized without an event and retained while frozen. */
+    UPROPERTY(BlueprintReadOnly, Transient, Category="Mechanism|Runtime|State")
+    bool bAtAngularExtendEnd = false;
+
     // Commanded state for Angular Velocity mode.
     UPROPERTY(BlueprintReadOnly, Transient, Category="Mechanism|Runtime|State")
     EMechanismAngularVelocityState AngularVelocityState =
@@ -464,22 +478,22 @@ public:
     UPROPERTY(BlueprintAssignable, Category="Mechanism|Events")
     FMechanismActuatorStateChanged OnStateChanged;
 
-    /** Fired when a non-zero Linear target reaches a sleeping/stopped state. */
+    /** Linear: non-zero target stops. Angular Position: actual angle enters the Open endpoint tolerance. */
     UPROPERTY(BlueprintAssignable, Category="Mechanism|Events",
         meta=(DisplayName="On Extend To End"))
     FMechanismActuatorLinearEndEvent OnExtendToEnd;
 
-    /** Fired when the zero Linear target reaches a sleeping/stopped state. */
+    /** Linear: zero target stops. Angular Position: actual angle enters the Closed endpoint tolerance. */
     UPROPERTY(BlueprintAssignable, Category="Mechanism|Events",
         meta=(DisplayName="On Retract To End"))
     FMechanismActuatorLinearEndEvent OnRetractToEnd;
 
-    /** Fired when a child leaves a previously reported non-zero Linear target. */
+    /** Linear: leaves the non-zero target. Angular Position: leaves Open tolerance plus hysteresis. */
     UPROPERTY(BlueprintAssignable, Category="Mechanism|Events",
         meta=(DisplayName="On Leave From Extend End"))
     FMechanismActuatorLinearEndEvent OnLeaveFromExtendEnd;
 
-    /** Fired when a child leaves the previously reported zero Linear target. */
+    /** Linear: leaves the zero target. Angular Position: leaves Closed tolerance plus hysteresis. */
     UPROPERTY(BlueprintAssignable, Category="Mechanism|Events",
         meta=(DisplayName="On Leave From Retract End"))
     FMechanismActuatorLinearEndEvent OnLeaveFromRetractEnd;
@@ -800,6 +814,8 @@ private:
     void ArmAngularTargetHardStop();
     bool TryForceStopAtAngularTarget();
     bool UpdateAngularPositionMotion(float DeltaTime);
+    void UpdateAngularEndpointEvents(bool bBroadcast = true);
+    void UpdateAngularEndpointState(float ActualAngleDegrees, bool bBroadcast);
     void CompleteAngularPositionMotion(
         UPrimitiveComponent* MovingComponent, FName BoneName,
         bool bForceFreeze, bool bReachedTarget = true);
@@ -838,6 +854,7 @@ private:
     float AngularNoProgressSeconds = 0.0f;
     bool bWaitingForLinearMotionStop = false;
     bool bWaitingForAngularTargetStop = false;
+    bool bUpdatingAngularEndpoints = false;
     bool bLinearEndCommandActive = false;
     bool bInitialLinearEndPrepared = false;
     bool bLinearEndWakeSuppressedUntilCommand = false;

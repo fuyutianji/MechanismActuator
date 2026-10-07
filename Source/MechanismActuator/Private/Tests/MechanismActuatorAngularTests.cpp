@@ -1,6 +1,8 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "MechanismActuatorComponent.h"
+#include "MechanismActuatorEndpointTestProbe.h"
+#include "UObject/StrongObjectPtr.h"
 #include "Components/BoxComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
@@ -24,6 +26,8 @@ struct FMechanismActuatorAngularTestAccess
     { return A->bWaitingForAngularTargetStop; }
     static void Sleep(UMechanismActuatorComponent* A, UPrimitiveComponent* Body)
     { A->HandleMovingComponentSleep(Body, NAME_None); }
+    static void Sample(UMechanismActuatorComponent* A, float Angle)
+    { A->UpdateAngularEndpointState(Angle, true); }
 };
 
 namespace
@@ -35,8 +39,10 @@ namespace
         UPrimitiveComponent* Child = nullptr;
         UMechanismActuatorComponent* Actuator = nullptr;
         float LastMeasuredAngle = 0.0f;
+        TStrongObjectPtr<UMechanismActuatorEndpointTestProbe> Probe;
 
-        explicit FAngularFixture(bool bHardStop = true)
+        explicit FAngularFixture(bool bHardStop = true,
+            EMechanismAngularAxis Axis = EMechanismAngularAxis::Swing1Z, bool bReverse = false)
         {
             const auto IVS = UWorld::InitializationValues().CreatePhysicsScene(true)
                 .ShouldSimulatePhysics(true).EnableTraceCollision(true)
@@ -77,15 +83,21 @@ namespace
             Owner->AddInstanceComponent(Actuator);
             Actuator->SetupAttachment(Parent);
             Actuator->bAutoInitialize = false;
+            Actuator->bStartFrozen = false;
+            Actuator->bFreezeOnRotationStopped = false;
             Actuator->bMaintainBarycenter = false;
             Actuator->ParentComponentName = Parent->GetFName();
             Actuator->ChildComponentName = Child->GetFName();
             Actuator->Mode = EMechanismActuatorMode::AngularPosition;
+            Actuator->AngularPositionAxis = Axis;
+            Actuator->bReverseAngularDirection = bReverse;
             Actuator->OpenAngleDegrees = -170.0f;
             Actuator->AngularPositionStrength = 1000.0f;
             Actuator->AngularVelocityStrength = 200.0f;
             Actuator->bEnableProjection = false;
             Actuator->bForceStopAtAngularTarget = bHardStop;
+            Probe.Reset(NewObject<UMechanismActuatorEndpointTestProbe>());
+            Probe->Bind(Actuator);
             Actuator->RegisterComponent();
             Actuator->InitializeActuator();
         }
@@ -165,7 +177,7 @@ bool FMechanismAngularStallTest::RunTest(const FString& Parameters)
     }
     TestTrue(TEXT("No progress classified as blocked"), F.Actuator->bAngularMotionBlocked);
     TestFalse(TEXT("Blocked is not target reached"), F.Actuator->bAngularTargetReached);
-    TestFalse(TEXT("Blocked command stops tick"), F.Actuator->IsComponentTickEnabled());
+    TestTrue(TEXT("Blocked command retains passive endpoint sensing"), F.Actuator->IsComponentTickEnabled());
     TestFalse(TEXT("Position drive no longer pushes"),
         F.Actuator->ConstraintInstance.ProfileInstance.AngularDrive.SwingDrive.bEnablePositionDrive);
     F.Command(77.0f);
@@ -216,7 +228,144 @@ bool FMechanismAngularSoftStopTest::RunTest(const FString& Parameters)
     F.RunToCompletion();
     TestTrue(TEXT("Rate-limited soft target reached"), F.Actuator->bAngularTargetReached);
     TestFalse(TEXT("Soft mode does not force freeze"), F.Actuator->bComponentFrozen);
-    TestFalse(TEXT("Completed command stops monitoring tick"), F.Actuator->IsComponentTickEnabled());
+    TestTrue(TEXT("Completed command retains passive endpoint sensing"), F.Actuator->IsComponentTickEnabled());
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMechanismAngularEndpointCycleTest,
+    "MechanismActuator.Angular.Endpoints.AllAxesFreezeAndReverse",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FMechanismAngularEndpointCycleTest::RunTest(const FString& Parameters)
+{
+    for (const auto Axis : {EMechanismAngularAxis::TwistX,
+        EMechanismAngularAxis::Swing1Z, EMechanismAngularAxis::Swing2Y})
+    for (const bool bReverse : {false, true})
+    for (const float OpenAngle : {-30.0f, 30.0f})
+    {
+        FAngularFixture F(true, Axis, bReverse);
+        F.Actuator->OpenAngleDegrees = OpenAngle;
+        TestTrue(TEXT("Initial actual Closed sensor"), F.Actuator->bAtAngularRetractEnd);
+        TestEqual(TEXT("Initialization does not emit a gameplay event"), F.Probe->RetractCount, 0);
+        F.Actuator->Open();
+        TestEqual(TEXT("Command alone is not departure"), F.Probe->LeaveRetractCount, 0);
+        F.RunToCompletion();
+        AddInfo(FString::Printf(TEXT("Endpoint cycle axis=%d reverse=%d open=%.1f measured=%.3f reached=%d blocked=%d"),
+            static_cast<int32>(Axis), bReverse, OpenAngle, F.LastMeasuredAngle,
+            F.Actuator->bAngularTargetReached, F.Actuator->bAngularMotionBlocked));
+        TestTrue(TEXT("Open endpoint reached"), F.Actuator->bAtAngularExtendEnd);
+        TestEqual(TEXT("Left Closed once"), F.Probe->LeaveRetractCount, 1);
+        TestEqual(TEXT("Arrived Open once"), F.Probe->ExtendCount, 1);
+        TestTrue(TEXT("Hard stop frozen"), F.Actuator->bComponentFrozen);
+        for (int32 I = 0; I < 5; ++I) { F.Step(false); }
+        TestEqual(TEXT("Frozen joint does not fake Closed arrival"), F.Probe->RetractCount, 0);
+        F.Actuator->Open();
+        F.RunToCompletion();
+        TestEqual(TEXT("Repeated Open does not repeat sensor event"), F.Probe->ExtendCount, 1);
+        TestEqual(TEXT("Unfreeze alone does not leave Open"), F.Probe->LeaveExtendCount, 0);
+        F.Actuator->Close();
+        F.RunToCompletion();
+        TestEqual(TEXT("Left Open once"), F.Probe->LeaveExtendCount, 1);
+        TestEqual(TEXT("Arrived Closed once"), F.Probe->RetractCount, 1);
+        TestTrue(TEXT("Closed latch preserved through freeze"), F.Actuator->bAtAngularRetractEnd);
+        TestTrue(TEXT("Event carries moving child"), F.Probe->LastMovingComponent == F.Child);
+        TestEqual(TEXT("Event carries bone"), F.Probe->LastBoneName, F.Actuator->ChildBoneName);
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMechanismAngularEndpointHysteresisTest,
+    "MechanismActuator.Angular.Endpoints.HysteresisAndInvalidJoint",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FMechanismAngularEndpointHysteresisTest::RunTest(const FString& Parameters)
+{
+    FAngularFixture F(false);
+    F.Actuator->OpenAngleDegrees = -90.0f;
+    const auto Sample = [&](float Angle) { FMechanismActuatorAngularTestAccess::Sample(F.Actuator, Angle); };
+    Sample(-89.6f);
+    TestEqual(TEXT("Arrival within 0.5 degrees"), F.Probe->ExtendCount, 1);
+    Sample(-89.35f);
+    Sample(-89.55f);
+    TestEqual(TEXT("Noise inside hysteresis does not leave"), F.Probe->LeaveExtendCount, 0);
+    Sample(-89.2f);
+    TestEqual(TEXT("Leave beyond 0.75 degrees"), F.Probe->LeaveExtendCount, 1);
+    Sample(-89.4f);
+    TestEqual(TEXT("No re-entry outside arrival tolerance"), F.Probe->ExtendCount, 1);
+    Sample(-89.55f);
+    TestEqual(TEXT("Re-entry is a new event"), F.Probe->ExtendCount, 2);
+    F.Actuator->BreakConstraint();
+    F.Step(false);
+    TestEqual(TEXT("Invalid joint does not emit a false zero-angle arrival"), F.Probe->RetractCount, 0);
+    TestTrue(TEXT("Invalid joint retains last valid sensor"), F.Actuator->bAtAngularExtendEnd);
+    F.Actuator->Mode = EMechanismActuatorMode::AngularVelocity;
+    F.Step(false);
+    TestEqual(TEXT("Turntable does not publish endpoint events"), F.Probe->ExtendCount, 2);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMechanismAngularEndpointIntermediateTest,
+    "MechanismActuator.Angular.Endpoints.IntermediateAndBlocked",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FMechanismAngularEndpointIntermediateTest::RunTest(const FString& Parameters)
+{
+    FAngularFixture F;
+    F.Command(75.0f);
+    F.RunToCompletion();
+    TestTrue(TEXT("Intermediate command actually reached"), F.Actuator->bAngularTargetReached);
+    TestEqual(TEXT("Intermediate position not Open endpoint"), F.Probe->ExtendCount, 0);
+    TestEqual(TEXT("Intermediate position not Closed endpoint"), F.Probe->RetractCount, 0);
+    F.Actuator->Open();
+    for (int32 I = 0; I < 150 && FMechanismActuatorAngularTestAccess::Pending(F.Actuator); ++I)
+    {
+        F.Child->PutAllRigidBodiesToSleep();
+        FMechanismActuatorAngularTestAccess::Sleep(F.Actuator, F.Child);
+        F.Step(false);
+    }
+    TestTrue(TEXT("No movement becomes blocked"), F.Actuator->bAngularMotionBlocked);
+    TestEqual(TEXT("Sleep or blocked never fabricates endpoint arrival"), F.Probe->ExtendCount, 0);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMechanismAngularEndpointReentrantTest,
+    "MechanismActuator.Angular.Endpoints.CallbackStartsNewCommand",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FMechanismAngularEndpointReentrantTest::RunTest(const FString& Parameters)
+{
+    FAngularFixture F;
+    F.Actuator->OpenAngleDegrees = -30.0f;
+    F.Probe->bCloseOnExtend = true;
+    F.Actuator->Open();
+    F.RunToCompletion();
+    TestEqual(TEXT("Open event starts Close"), F.Probe->ExtendCount, 1);
+    TestEqual(TEXT("New Close command not frozen by old completion"), F.Probe->RetractCount, 1);
+    TestTrue(TEXT("Final actual Closed endpoint"), F.Actuator->bAtAngularRetractEnd);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMechanismAngularCustomEndpointTest,
+    "MechanismActuator.Angular.Endpoints.NonZeroClosedAndPassiveSensing",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FMechanismAngularCustomEndpointTest::RunTest(const FString& Parameters)
+{
+    FAngularFixture F;
+    F.Actuator->ClosedAngleDegrees = -30.0f;
+    F.Actuator->OpenAngleDegrees = 60.0f;
+    F.Actuator->ReinitializeActuator();
+    TestFalse(TEXT("Initial zero is not nonzero Closed endpoint"), F.Actuator->bAtAngularRetractEnd);
+    F.Actuator->Close();
+    F.RunToCompletion();
+    TestEqual(TEXT("Nonzero Closed reached"), F.Probe->RetractCount, 1);
+    F.Actuator->Open();
+    F.RunToCompletion();
+    TestEqual(TEXT("Positive Open reached"), F.Probe->ExtendCount, 1);
+    TestEqual(TEXT("Nonzero Closed left"), F.Probe->LeaveRetractCount, 1);
+
+    // Release the frozen joint without starting a command, then physically
+    // displace the child: idle monitoring must still clear the endpoint sensor.
+    F.Actuator->UnfreezeComponent();
+    TestFalse(TEXT("No new motion command"), FMechanismActuatorAngularTestAccess::Pending(F.Actuator));
+    F.Child->SetWorldRotation(FRotator(0.0, 10.0, 0.0), false, nullptr, ETeleportType::TeleportPhysics);
+    F.Step(false);
+    TestEqual(TEXT("External displacement emits actual leave"), F.Probe->LeaveExtendCount, 1);
     return true;
 }
 

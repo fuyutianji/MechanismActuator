@@ -128,6 +128,8 @@ void UMechanismActuatorComponent::UninitializeComponent()
     bAngularTargetHardStopArmed = false;
     bLinearEndCommandActive = false;
     bInitialLinearEndPrepared = false;
+    bAtAngularRetractEnd = false;
+    bAtAngularExtendEnd = false;
     bLinearEndWakeSuppressedUntilCommand = false;
     bHasReachedLinearEnd = false;
     UnbindMovingComponentEvents();
@@ -223,6 +225,12 @@ void UMechanismActuatorComponent::TickComponent(
         return;
     }
 
+    const uint64 SampledCommand = MotionCommandRevision;
+    UpdateAngularEndpointEvents();
+    if (SampledCommand != MotionCommandRevision || bComponentFrozen || !bActuatorInitialized)
+    {
+        return;
+    }
     if (UpdateAngularPositionMotion(DeltaTime))
     {
         return;
@@ -546,6 +554,11 @@ bool UMechanismActuatorComponent::InitializeActuator()
     UpdateExposedStates();
     ApplyCurrentState();
     PrepareInitialLinearEnd();
+    // Establish the actual initial sensor state, just like the linear baseline:
+    // no gameplay events during component initialization, before Actor BeginPlay.
+    bAtAngularRetractEnd = false;
+    bAtAngularExtendEnd = false;
+    UpdateAngularEndpointEvents(false);
     if (bStartFrozen)
     {
         bStartFrozenPending = true;
@@ -1101,14 +1114,18 @@ FRotator UMechanismActuatorComponent::MakeAngularTarget(
 
 float UMechanismActuatorComponent::GetCurrentAngularPositionDegrees() const
 {
+    // Chaos reports quaternion axis angles. MakeAngularTarget uses FRotator,
+    // whose Roll/Pitch signs are opposite to quaternion X/Y (Yaw/Z agrees).
+    // Convert feedback to the same convention as the existing authored targets;
+    // do not reverse the actual drive or migrate users' endpoint settings.
     switch (AngularPositionAxis)
     {
         case EMechanismAngularAxis::TwistX:
-            return GetCurrentTwist();
+            return -GetCurrentTwist();
         case EMechanismAngularAxis::Swing1Z:
             return GetCurrentSwing1();
         case EMechanismAngularAxis::Swing2Y:
-            return GetCurrentSwing2();
+            return -GetCurrentSwing2();
         default:
             return 0.0f;
     }
@@ -1411,6 +1428,93 @@ bool UMechanismActuatorComponent::UpdateAngularPositionMotion(const float DeltaT
     return false;
 }
 
+void UMechanismActuatorComponent::UpdateAngularEndpointEvents(const bool bBroadcast)
+{
+    UPrimitiveComponent* Child = BoundSleepComponent.Get();
+    if (Mode != EMechanismActuatorMode::AngularPosition || !bActuatorInitialized
+        || bComponentFrozen || PhysicsTransitionDepth > 0 || !IsValid(Child)
+        || !Child->IsSimulatingPhysics(ChildBoneName)
+        || !ConstraintInstance.IsValidConstraintInstance() || ConstraintInstance.IsTerminated())
+    {
+        // A frozen or invalid joint cannot provide a new angle. Never interpret
+        // its fallback zero as arrival at Closed; retain the last valid sample.
+        return;
+    }
+    UpdateAngularEndpointState(GetCurrentAngularPositionDegrees(), bBroadcast);
+}
+
+void UMechanismActuatorComponent::UpdateAngularEndpointState(
+    const float ActualAngleDegrees, const bool bBroadcast)
+{
+    if (bUpdatingAngularEndpoints || !FMath::IsFinite(ActualAngleDegrees)) { return; }
+    TGuardValue<bool> UpdatingGuard(bUpdatingAngularEndpoints, true);
+    const float Direction = bReverseAngularDirection ? -1.0f : 1.0f;
+    const float ClosedError = FMath::Abs(FMath::FindDeltaAngleDegrees(
+        ActualAngleDegrees, Direction * ClosedAngleDegrees));
+    const float OpenError = FMath::Abs(FMath::FindDeltaAngleDegrees(
+        ActualAngleDegrees, Direction * OpenAngleDegrees));
+    const float EnterTolerance = FMath::Max(0.01f, AngularTargetStopToleranceDegrees);
+    const float LeaveTolerance = EnterTolerance + FMath::Max(0.0f, AngularEndpointHysteresisDegrees);
+    bool bNextRetracted = ClosedError <= (bAtAngularRetractEnd ? LeaveTolerance : EnterTolerance);
+    bool bNextExtended = OpenError <= (bAtAngularExtendEnd ? LeaveTolerance : EnterTolerance);
+    // Overlapping endpoint bands must not assert both PLC sensors. Preserve an
+    // existing latch until it exits its band; otherwise choose the nearer end.
+    if (bNextRetracted && bNextExtended)
+    {
+        bNextRetracted = bAtAngularRetractEnd
+            || (!bAtAngularExtendEnd && ClosedError <= OpenError);
+        bNextExtended = !bNextRetracted;
+    }
+    if (!bBroadcast)
+    {
+        bAtAngularRetractEnd = bNextRetracted;
+        bAtAngularExtendEnd = bNextExtended;
+        return;
+    }
+
+    UPrimitiveComponent* Child = BoundSleepComponent.Get();
+    const uint64 SampledCommand = MotionCommandRevision;
+    const auto WasInterrupted = [&]()
+    {
+        return SampledCommand != MotionCommandRevision || !IsValid(this)
+            || !IsValid(Child) || !bActuatorInitialized || bComponentFrozen
+            || Mode != EMechanismActuatorMode::AngularPosition;
+    };
+    // Leave first, then arrive. Commit only the transition being dispatched so
+    // a callback that starts another command cannot swallow a pending event.
+    if (bAtAngularRetractEnd && !bNextRetracted)
+    {
+        bAtAngularRetractEnd = false;
+        ReceiveLeaveFromRetractEnd(Child, ChildBoneName);
+        if (WasInterrupted()) { return; }
+        OnLeaveFromRetractEnd.Broadcast(Child, ChildBoneName);
+        if (WasInterrupted()) { return; }
+    }
+    if (bAtAngularExtendEnd && !bNextExtended)
+    {
+        bAtAngularExtendEnd = false;
+        ReceiveLeaveFromExtendEnd(Child, ChildBoneName);
+        if (WasInterrupted()) { return; }
+        OnLeaveFromExtendEnd.Broadcast(Child, ChildBoneName);
+        if (WasInterrupted()) { return; }
+    }
+    if (!bAtAngularRetractEnd && bNextRetracted)
+    {
+        bAtAngularRetractEnd = true;
+        ReceiveRetractToEnd(Child, ChildBoneName);
+        if (WasInterrupted()) { return; }
+        OnRetractToEnd.Broadcast(Child, ChildBoneName);
+        if (WasInterrupted()) { return; }
+    }
+    if (!bAtAngularExtendEnd && bNextExtended)
+    {
+        bAtAngularExtendEnd = true;
+        ReceiveExtendToEnd(Child, ChildBoneName);
+        if (WasInterrupted()) { return; }
+        OnExtendToEnd.Broadcast(Child, ChildBoneName);
+    }
+}
+
 bool UMechanismActuatorComponent::TryForceStopAtAngularTarget()
 {
     if (!bAngularTargetHardStopArmed)
@@ -1478,6 +1582,13 @@ void UMechanismActuatorComponent::CompleteAngularPositionMotion(
     }
 
     const uint64 CompletedCommand = MotionCommandRevision;
+    // Force-sleep completion can run outside Tick. Sample before callbacks or
+    // freezing invalidate the joint, and never freeze a new callback command.
+    UpdateAngularEndpointEvents();
+    if (CompletedCommand != MotionCommandRevision || bComponentFrozen || !bActuatorInitialized)
+    {
+        return;
+    }
     bWaitingForAngularTargetStop = false;
     bAngularTargetHardStopArmed = false;
     bAngularProgressInitialized = false;
@@ -1836,7 +1947,7 @@ void UMechanismActuatorComponent::RequestAngularPositionTarget(
         bAngularSpeedTargetInitialized = true;
         SetAngularOrientationTarget(
             MakeAngularTarget(CurrentAngularPositionTargetDegrees));
-        SetComponentTickEnabled(false);
+        RefreshAngularSpeedTick();
         return;
     }
 
@@ -1852,7 +1963,7 @@ void UMechanismActuatorComponent::RequestAngularPositionTarget(
             DesiredAngularPositionTargetDegrees;
         SetAngularOrientationTarget(
             MakeAngularTarget(CurrentAngularPositionTargetDegrees));
-        SetComponentTickEnabled(false);
+        RefreshAngularSpeedTick();
         return;
     }
 
@@ -1861,11 +1972,10 @@ void UMechanismActuatorComponent::RequestAngularPositionTarget(
 
 void UMechanismActuatorComponent::RefreshAngularSpeedTick()
 {
-    // Keep monitoring the body after the interpolated target has arrived.
-    // Once the command completes or stalls, no angular tick is needed.
+    // Passive endpoint sensing also observes motion caused by external forces.
+    // This does not wake sleeping bodies or restart a completed/blocked drive.
     const bool bShouldMonitorMotion =
-        bWaitingForAngularTargetStop
-        && Mode == EMechanismActuatorMode::AngularPosition
+        Mode == EMechanismActuatorMode::AngularPosition
         && bActuatorInitialized
         && !bComponentFrozen;
 

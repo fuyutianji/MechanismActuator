@@ -1704,6 +1704,18 @@ void UMechanismActuatorComponent::HandleMovingComponentSleep(
         return;
     }
 
+    if (Mode == EMechanismActuatorMode::LinearPosition
+        && bWaitingForLinearMotionStop && LinearMaxSpeedCmPerSecond > 0.f
+        && bLinearSpeedTargetInitialized
+        && !CurrentLinearPositionTargetCm.Equals(DesiredLinearPositionTargetCm, KINDA_SMALL_NUMBER))
+    {
+        // A neutral start can sleep before the speed-limited drive gains speed.
+        // Let the next ramp tick wake it instead of reporting a false endpoint.
+        // The independent force-sleep stall monitor can still finish a blocked grip.
+        RefreshLinearSpeedTick();
+        return;
+    }
+
     CompleteLinearPositionMotion(SleepingComponent, BoneName, false);
 }
 
@@ -1900,6 +1912,50 @@ bool UMechanismActuatorComponent::IsComponentFrozen() const
     return bComponentFrozen;
 }
 
+bool UMechanismActuatorComponent::TryGetActualLinearPosition(FVector& OutPosition) const
+{
+    UPrimitiveComponent* Parent = GetParentComponent();
+    UPrimitiveComponent* Child = GetMovingComponent();
+    const FBodyInstance* ParentBody = IsValid(Parent) ? Parent->GetBodyInstance(ParentBoneName, false) : nullptr;
+    const FBodyInstance* ChildBody = IsValid(Child) ? Child->GetBodyInstance(ChildBoneName, false) : nullptr;
+    if (!ParentBody || !ChildBody || !ParentBody->IsValidBodyInstance() || !ChildBody->IsValidBodyInstance()
+        || ParentBody->WeldParent || ChildBody->WeldParent
+        || (bComponentFrozen ? !bHasSavedConstraintState : !ConstraintInstance.IsValidConstraintInstance()))
+    {
+        return false;
+    }
+
+    FTransform Frame1 = bComponentFrozen ? SavedConstraintFrame1 : ConstraintInstance.GetRefFrame(EConstraintFrame::Frame1);
+    FTransform Frame2 = bComponentFrozen ? SavedConstraintFrame2 : ConstraintInstance.GetRefFrame(EConstraintFrame::Frame2);
+    // Match FConstraintInstance's connector scaling; drive targets themselves are cm.
+    Frame1.ScaleTranslation(FVector(ConstraintInstance.GetLastKnownScale()));
+    Frame2.ScaleTranslation(FVector(ConstraintInstance.GetLastKnownScale()));
+    const FTransform World1 = Frame1 * ParentBody->GetUnrealWorldTransform();
+    const FTransform World2 = Frame2 * ChildBody->GetUnrealWorldTransform();
+    // Chaos solves UE's two constraint frames in reverse order: its drive target
+    // is Frame1's position relative to Frame2, NOT Child relative to Parent.
+    OutPosition = FilterLinearTarget(World2.InverseTransformVectorNoScale(World1.GetLocation() - World2.GetLocation()));
+    return !OutPosition.ContainsNaN();
+}
+
+bool UMechanismActuatorComponent::PrepareLinearPositionCommand(const FVector& Target)
+{
+    if (Mode != EMechanismActuatorMode::LinearPosition || !bActuatorInitialized) return true;
+    // Repeated PLC commands must not restart a moving target ramp every frame.
+    if (!bComponentFrozen && FilterLinearTarget(Target).Equals(DesiredLinearPositionTargetCm, KINDA_SMALL_NUMBER)) return true;
+    FVector ActualPosition;
+    if (!TryGetActualLinearPosition(ActualPosition))
+    {
+        UE_LOG(LogMechanismActuator, Warning, TEXT("%s: Linear command cancelled because the actual constraint position could not be read."), *GetPathName());
+        return false;
+    }
+    if (bComponentFrozen) return UnfreezeComponentInternal(&ActualPosition);
+    CurrentLinearPositionTargetCm = ActualPosition;
+    bLinearSpeedTargetInitialized = true;
+    SetLinearPositionTarget(ActualPosition);
+    return true;
+}
+
 void UMechanismActuatorComponent::RequestLinearPositionTarget(
     const FVector& Target)
 {
@@ -2064,6 +2120,7 @@ void UMechanismActuatorComponent::SetActuatorActive(const bool bActive)
         || Mode == EMechanismActuatorMode::AngularPosition;
     const bool bStartsAngularVelocity =
         Mode == EMechanismActuatorMode::AngularVelocity && bActive;
+    if (!PrepareLinearPositionCommand(bActive ? ExtendedPositionCm : RetractedPositionCm)) return;
     if ((bUsesPositionTarget || bStartsAngularVelocity)
         && bComponentFrozen
         && !UnfreezeComponentInternal())
@@ -2160,6 +2217,8 @@ void UMechanismActuatorComponent::SetPositionAlpha(float Alpha)
     const bool bUsesPositionTarget =
         Mode == EMechanismActuatorMode::LinearPosition
         || Mode == EMechanismActuatorMode::AngularPosition;
+    Alpha = FMath::Clamp(Alpha, 0.0f, 1.0f);
+    if (!PrepareLinearPositionCommand(FMath::Lerp(RetractedPositionCm, ExtendedPositionCm, Alpha))) return;
     if (bUsesPositionTarget
         && bComponentFrozen
         && !UnfreezeComponentInternal())
@@ -2170,7 +2229,6 @@ void UMechanismActuatorComponent::SetPositionAlpha(float Alpha)
         return;
     }
 
-    Alpha = FMath::Clamp(Alpha, 0.0f, 1.0f);
     bWaitingForLinearMotionStop = false;
     bWaitingForAngularTargetStop = false;
     bAngularTargetHardStopArmed = false;
@@ -2595,7 +2653,7 @@ void UMechanismActuatorComponent::UnfreezeComponent()
     UnfreezeComponentInternal();
 }
 
-bool UMechanismActuatorComponent::UnfreezeComponentInternal()
+bool UMechanismActuatorComponent::UnfreezeComponentInternal(const FVector* LinearCommandStart)
 {
     if (!IsMechanismControlAllowed(this)) return false;
     LogSleepDiagnostic(TEXT("Unfreeze.Entry"));
@@ -2684,6 +2742,12 @@ bool UMechanismActuatorComponent::UnfreezeComponentInternal()
     }
 
     LogMechanismChainState(TEXT("Unfreeze.BeforeConfigureConstraint"));
+    if (LinearCommandStart)
+    {
+        // Initialize the rebuilt joint with a neutral target too; never expose
+        // the old closing force while the release command is being prepared.
+        SetLinearPositionTarget(*LinearCommandStart);
+    }
     if (!ConfigureConstraintForBodies(Parent, Child, TEXT("Unfreeze")))
     {
         LogMechanismChainState(TEXT("Unfreeze.ConfigureConstraintFailed"));
@@ -2716,7 +2780,28 @@ bool UMechanismActuatorComponent::UnfreezeComponentInternal()
             EConstraintFrame::Frame1, SavedConstraintFrame1);
         SetConstraintReferenceFrame(
             EConstraintFrame::Frame2, SavedConstraintFrame2);
-        SetLinearPositionTarget(SavedLinearPositionTarget);
+        // SetRefFrame updates authored frames but does not apply the instance
+        // scale to the live Chaos connectors, unlike initial joint creation.
+        if (!FMath::IsNearlyEqual(ConstraintInstance.GetLastKnownScale(), 1.f))
+        {
+            FTransform PhysicsFrame1 = SavedConstraintFrame1;
+            FTransform PhysicsFrame2 = SavedConstraintFrame2;
+            PhysicsFrame1.ScaleTranslation(FVector(ConstraintInstance.GetLastKnownScale()));
+            PhysicsFrame2.ScaleTranslation(FVector(ConstraintInstance.GetLastKnownScale()));
+            FPhysicsInterface::ExecuteOnUnbrokenConstraintReadWrite(ConstraintInstance.ConstraintHandle,
+                [&](const FPhysicsConstraintHandle& Handle)
+                {
+                    FPhysicsInterface::SetLocalPose(Handle, PhysicsFrame1, EConstraintFrame::Frame1);
+                    FPhysicsInterface::SetLocalPose(Handle, PhysicsFrame2, EConstraintFrame::Frame2);
+                });
+        }
+        const FVector RestoredLinearTarget = LinearCommandStart ? *LinearCommandStart : SavedLinearPositionTarget;
+        SetLinearPositionTarget(RestoredLinearTarget);
+        if (LinearCommandStart)
+        {
+            CurrentLinearPositionTargetCm = RestoredLinearTarget;
+            bLinearSpeedTargetInitialized = true;
+        }
         SetLinearVelocityTarget(SavedLinearVelocityTarget);
         SetAngularOrientationTarget(SavedAngularOrientationTarget);
         SetAngularVelocityTarget(SavedAngularVelocityTarget);

@@ -716,6 +716,7 @@ private:
     UFUNCTION()
     void HandleCollisionPairPhysicsState(UPrimitiveComponent* Component, EComponentPhysicsStateChange Change);
     friend struct FMechanismActuatorAngularTestAccess;
+    friend struct FMechanismActuatorLinearTestAccess;
     // One scope protects managed bodies and suppresses internal motion callbacks.
     struct FPhysicsTransitionScope
     {
@@ -804,6 +805,8 @@ private:
     mutable const TCHAR* DiagnosticLastWakeReason = TEXT("None");
     void ApplyCurrentState();
     void RequestLinearPositionTarget(const FVector& Target);
+    bool PrepareLinearPositionCommand(const FVector& Target);
+    bool TryGetActualLinearPosition(FVector& OutPosition) const;
     void RequestAngularPositionTarget(float TargetDegrees);
     void RefreshLinearSpeedTick();
     void RefreshAngularSpeedTick();
@@ -838,7 +841,7 @@ private:
     // Central simulation boundary; retires targets only when entering simulation.
     void SetMovingComponentSimulation(UPrimitiveComponent* Child, bool bSimulate, const TCHAR* Phase);
     bool FreezeComponentInternal();
-    bool UnfreezeComponentInternal();
+    bool UnfreezeComponentInternal(const FVector* LinearCommandStart = nullptr);
     bool UsesLinearAxis(EMechanismLinearAxis Axis) const;
 
     FVector CurrentLinearPositionTargetCm = FVector::ZeroVector;

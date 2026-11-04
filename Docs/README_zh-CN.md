@@ -250,6 +250,20 @@ On Component Sleep 事件触发，但两者是不同状态：
 - 恢复 Freeze 前两侧 Constraint Ref Frame，以及线性/角度驱动的实时位置和速度 Target；
 - 唤醒活动组件，不会把冻结位置重新定义为约束坐标系的零点。
 
+**Experiment / Preserve Attachment During Motion** 默认关闭。单刚体通过
+SetInstanceSimulatePhysics 切换模拟；开启实验选项后，启动模拟时保留现有挂接，
+Unfreeze 跳过解除挂接，并临时将活动组件的位置、旋转、缩放全部设为世界绝对变换。
+父级变换不再直接传递给运动中的子端，物理约束和碰撞仍然生效。
+
+插件保存原始 Absolute/Relative 标志，在关闭模拟后保持当前世界姿态恢复；原本采用
+相对变换的子端冻结后会重新跟随配置父端，Freeze 复用已有的父级挂接。解冻失败回退
+和组件卸载也会恢复保存的标志。骨骼网格仍使用原生组件级的多刚体处理。
+运行时修改开关会在下一次模拟切换时生效。
+
+该选项不会把已经脱离的运动组件自动挂回。UE 原生 BeginPlay 仍可能解除正在模拟的
+刚体挂接；开启 Start Frozen 可让首次指令从已挂接、未模拟的冻结状态启动。
+两条路径均保留约束快照恢复与解冻姿态处理。
+
 Freeze Component 只能用于当前正在模拟物理的活动组件。使用纯节点
 Is Component Frozen 判断组件是否被本插件冻结；它与 Chaos 原生的物理
 Sleep/Wake 状态无关。

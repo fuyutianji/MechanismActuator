@@ -134,6 +134,20 @@ public:
         meta=(DisplayName="Disable Inertia Conditioning"))
     bool bDisableInertiaConditioning = false;
 
+    /** Experimental, default off. Keeps the moving child's existing attachment during
+     * physics motion and temporarily uses absolute world location, rotation and scale,
+     * so parent transforms do not move the child. Physics constraints and collisions
+     * still apply. Freeze disables simulation and restores the saved transform
+     * inheritance at the current world pose; normal relative settings let the frozen
+     * child follow the configured parent again. Changes apply on the next simulation
+     * transition. Does not reattach an already detached child. Use Start Frozen to
+     * avoid Unreal's native BeginPlay detachment. Skeletal meshes retain native
+     * multi-body handling.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Experiment",
+        meta=(DisplayName="Preserve Attachment During Motion"))
+    bool bExperimentalPreserveAttachmentDuringMotion = false;
+
     /** Ignore parent/child physics collisions while initialized, including frozen periods without a motion constraint. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, BlueprintSetter=SetMechanismDisableCollision, Category="Mechanism|Constraint")
     bool bDisableCollision = true;
@@ -840,6 +854,12 @@ private:
     void SetComponentFrozen(bool bFrozen);
     // Central simulation boundary; retires targets only when entering simulation.
     void SetMovingComponentSimulation(UPrimitiveComponent* Child, bool bSimulate, const TCHAR* Phase);
+    void EnablePreservedAttachmentMotion(UPrimitiveComponent* Child);
+    void RestorePreservedAttachmentMotion();
+    TWeakObjectPtr<UPrimitiveComponent> PreservedAttachmentMotionComponent;
+    bool bSavedMotionAbsoluteLocation = false;
+    bool bSavedMotionAbsoluteRotation = false;
+    bool bSavedMotionAbsoluteScale = false;
     bool FreezeComponentInternal();
     bool UnfreezeComponentInternal(const FVector* LinearCommandStart = nullptr);
     bool UsesLinearAxis(EMechanismLinearAxis Axis) const;

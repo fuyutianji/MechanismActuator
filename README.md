@@ -244,6 +244,22 @@ One physics constraint can only have one moving child, so one actuator should no
   and wake-notification settings, rebuilds the constraint, restores both local
   constraint reference frames plus the live linear/angular drive targets, and
   wakes the child. Call it only after Freeze Component.
+- Experiment / Preserve Attachment During Motion defaults to off. Single-body
+  simulation uses SetInstanceSimulatePhysics; enabling the experiment preserves
+  the existing attachment when simulation starts, skips Unfreeze's detachment,
+  and temporarily makes child location, rotation and scale absolute in world
+  space. Parent transforms no longer propagate into the moving child; physics
+  constraints and collisions still apply. The original absolute/relative flags
+  are saved and restored after simulation stops, at the current world pose.
+  Normal relative settings let the frozen child follow its configured parent
+  again. Freeze reuses an attachment already on that parent. Rollback and
+  component uninitialization also restore the saved flags.
+  Skeletal meshes retain their native component-level multi-body handling.
+  Changing the option takes effect on the next simulation transition.
+  This does not reattach an already detached moving child. Unreal's native
+  BeginPlay can still detach a body that is already simulating; Start Frozen
+  allows the first command to begin from an attached, non-simulating state.
+  Constraint snapshots and thaw-pose handling remain enabled in both paths.
 - Is Component Frozen reports only this plugin's freeze state, independently of
   the rigid body's native Chaos sleep/wake state.
 - Blueprint-readable command states are exposed separately for each mode:

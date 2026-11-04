@@ -133,6 +133,7 @@ void UMechanismActuatorComponent::UninitializeComponent()
     bLinearEndWakeSuppressedUntilCommand = false;
     bHasReachedLinearEnd = false;
     UnbindMovingComponentEvents();
+    RestorePreservedAttachmentMotion();
     bActuatorInitialized = false;
     SetComponentFrozen(false);
     bHasSavedConstraintState = false;
@@ -540,6 +541,7 @@ bool UMechanismActuatorComponent::InitializeActuator()
         if (!ConfigureConstraintForBodies(Parent, Child, TEXT("Initialize")))
         {
             UnbindMovingComponentEvents();
+            RestorePreservedAttachmentMotion();
             return false;
         }
 
@@ -2577,9 +2579,10 @@ bool UMechanismActuatorComponent::FreezeComponentInternal()
         ConstraintInstance.IsValidConstraintInstance() ? TEXT("true") : TEXT("false"),
         ConstraintInstance.IsTerminated() ? TEXT("true") : TEXT("false"));
 
-    // SetSimulatePhysics(false) does not restore the attachment that Unreal
-    // removed when simulation was enabled. Keep World preserves the solved pose.
-    if (Child->GetAttachParent())
+    // Reuse the configured parent in the experiment; the default path still
+    // rebuilds the frozen attachment with Keep World at the solved pose.
+    if (Child->GetAttachParent()
+        && (!bExperimentalPreserveAttachmentDuringMotion || Child->GetAttachParent() != Parent))
     {
         Child->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
     }
@@ -2698,11 +2701,17 @@ bool UMechanismActuatorComponent::UnfreezeComponentInternal(const FVector* Linea
     TArray<FDependentConstraintSnapshot> DependentConstraintSnapshots;
     CaptureDependentConstraintSnapshots(Child, DependentConstraintSnapshots);
 
-    LogMechanismChainState(TEXT("Unfreeze.BeforeDetach"));
-    // Detach before enabling simulation. Keep World means the mechanism
-    // resumes from the exact pose reached while it followed the parent.
-    Child->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
-    LogMechanismChainState(TEXT("Unfreeze.AfterDetach"));
+    if (!bExperimentalPreserveAttachmentDuringMotion)
+    {
+        LogMechanismChainState(TEXT("Unfreeze.BeforeDetach"));
+        // The default path resumes independent simulation from the frozen pose.
+        Child->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
+        LogMechanismChainState(TEXT("Unfreeze.AfterDetach"));
+    }
+    else
+    {
+        LogMechanismChainState(TEXT("Unfreeze.AttachmentPreserved"));
+    }
     Child->BodyInstance.bGenerateWakeEvents = bSavedGenerateWakeEvents;
     LogMechanismChainState(TEXT("Unfreeze.BeforeSetSimulatePhysics"));
     LogSleepDiagnostic(TEXT("Unfreeze.BeforeSetSimulatePhysics"));

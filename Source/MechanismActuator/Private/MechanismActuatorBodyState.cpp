@@ -1,8 +1,9 @@
-// Body-state transitions: SetMovingComponentSimulation preserves the thaw pose,
-// retires old kinematic targets, and reconciles target metadata after Chaos push.
+// Body-state transitions: SetMovingComponentSimulation switches body simulation,
+// optionally isolates attached motion, preserves the thaw pose, and retires Chaos targets.
 #include "MechanismActuatorComponent.h"
 #include "MechanismActuatorLog.h"
 #include "Components/PrimitiveComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "PhysicsEngine/BodyInstance.h"
 #include "Physics/PhysicsInterfaceCore.h"
 #include "PhysicsProxy/SingleParticlePhysicsProxy.h"
@@ -20,10 +21,35 @@ void UMechanismActuatorComponent::SetMovingComponentSimulation(
     const bool bWasKinematic = PreviousActor
         && PreviousActor->GetGameThreadAPI().ObjectState() == Chaos::EObjectStateType::Kinematic;
 
-    // Keep the existing component simulation/attachment semantics. Freezing is
-    // deliberately unchanged: a frozen child must still follow its moving parent.
-    Child->SetSimulatePhysics(bSimulate);
-    if (!bSimulate) return;
+    if (bSimulate)
+    {
+        if (bExperimentalPreserveAttachmentDuringMotion)
+        {
+            EnablePreservedAttachmentMotion(Child);
+        }
+        else
+        {
+            RestorePreservedAttachmentMotion();
+        }
+    }
+
+    if (USkeletalMeshComponent* SkeletalChild = Cast<USkeletalMeshComponent>(Child))
+    {
+        // Preserve native multi-body, animation-blending and tick bookkeeping.
+        // Skeletal meshes already preserve attachment in their per-body calls.
+        SkeletalChild->SetSimulatePhysics(bSimulate);
+    }
+    else
+    {
+        Child->BodyInstance.SetInstanceSimulatePhysics(
+            bSimulate, false, bExperimentalPreserveAttachmentDuringMotion);
+    }
+    if (!bSimulate)
+    {
+        // Restore even if the experiment was disabled while this child was moving.
+        RestorePreservedAttachmentMotion();
+        return;
+    }
 
     FBodyInstance* Body = Child->GetBodyInstance(ChildBoneName, false);
     if (!Body || Body->WeldParent || !Body->IsValidBodyInstance()) return;

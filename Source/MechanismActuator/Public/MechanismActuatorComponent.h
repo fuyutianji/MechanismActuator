@@ -9,6 +9,7 @@
 
 class UPrimitiveComponent;
 struct FMechanismCollisionPairLease;
+struct FMechanismAngularBlockageState;
 
 /** Optional host permission policy; true permits device commands. */
 DECLARE_DELEGATE_RetVal_OneParam(bool, FMechanismActuatorControlGate, const UObject*);
@@ -228,6 +229,21 @@ public:
         meta=(EditCondition="Mode == EMechanismActuatorMode::AngularPosition", EditConditionHides,
         ClampMin="0.1", Units="s", DisplayName="Angular Stall Timeout"))
     float AngularStallTimeoutSeconds = 1.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Experiment",
+        meta=(EditCondition="Mode == EMechanismActuatorMode::AngularPosition", EditConditionHides,
+        DisplayName="Sleep On Angular Blockage"))
+    bool bSleepOnAngularBlockage = false;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Experiment", AdvancedDisplay,
+        meta=(EditCondition="Mode == EMechanismActuatorMode::AngularPosition && bSleepOnAngularBlockage", EditConditionHides,
+        ClampMin="0.05", ClampMax="0.5", Units="s", DisplayName="Angular Blockage Confirmation"))
+    float AngularBlockageConfirmSeconds = 0.15f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Experiment", AdvancedDisplay,
+        meta=(EditCondition="Mode == EMechanismActuatorMode::AngularPosition && bSleepOnAngularBlockage", EditConditionHides,
+        ClampMin="0.001", ClampMax="0.25", Units="deg", DisplayName="Angular Blockage Jitter"))
+    float AngularBlockageJitterDegrees = 0.05f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mechanism|Angular Velocity",
         meta=(EditCondition="Mode == EMechanismActuatorMode::AngularVelocity", EditConditionHides))
@@ -831,11 +847,14 @@ private:
     void ArmAngularTargetHardStop();
     bool TryForceStopAtAngularTarget();
     bool UpdateAngularPositionMotion(float DeltaTime);
+    bool TrySleepOnAngularBlockage();
+    void ResetAngularBlockageTracking();
+    TSharedPtr<FMechanismAngularBlockageState, ESPMode::ThreadSafe> AngularBlockageState;
     void UpdateAngularEndpointEvents(bool bBroadcast = true);
     void UpdateAngularEndpointState(float ActualAngleDegrees, bool bBroadcast);
     void CompleteAngularPositionMotion(
         UPrimitiveComponent* MovingComponent, FName BoneName,
-        bool bForceFreeze, bool bReachedTarget = true);
+        bool bForceFreeze, bool bReachedTarget = true, bool bSleepBlockedBody = false);
     void CompleteLinearPositionMotion(
         UPrimitiveComponent* MovingComponent, FName BoneName, bool bForceFreeze);
     void BroadcastStartRotating();

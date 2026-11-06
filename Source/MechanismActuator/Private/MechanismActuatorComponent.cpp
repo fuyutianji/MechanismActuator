@@ -110,6 +110,7 @@ void UMechanismActuatorComponent::InitializeComponent()
 
 void UMechanismActuatorComponent::UninitializeComponent()
 {
+    ResetAngularBlockageTracking();
     StopForceSleepMonitoring();
     StopSleepDiagnostics();
     ReleaseCollisionPairPolicy(true);
@@ -670,6 +671,7 @@ bool UMechanismActuatorComponent::EnsureConstraintFrameOnParent(
 bool UMechanismActuatorComponent::ConfigureConstraintForBodies(
     UPrimitiveComponent* Parent, UPrimitiveComponent* Child, const TCHAR* Phase)
 {
+    ResetAngularBlockageTracking();
     if (!IsValid(Parent) || !IsValid(Child) || Parent == Child)
     {
         UE_LOG(LogMechanismActuator, Error,
@@ -1358,6 +1360,7 @@ bool UMechanismActuatorComponent::UpdateAngularPositionMotion(const float DeltaT
 {
     if (!bWaitingForAngularTargetStop || PhysicsTransitionDepth > 0)
     {
+        ResetAngularBlockageTracking();
         RefreshAngularSpeedTick();
         return true;
     }
@@ -1370,6 +1373,7 @@ bool UMechanismActuatorComponent::UpdateAngularPositionMotion(const float DeltaT
         bWaitingForAngularTargetStop = false;
         bAngularTargetHardStopArmed = false;
         bAngularProgressInitialized = false;
+        ResetAngularBlockageTracking();
         RefreshAngularSpeedTick();
         return true;
     }
@@ -1385,6 +1389,7 @@ bool UMechanismActuatorComponent::UpdateAngularPositionMotion(const float DeltaT
     const bool bAwake = Child->IsAnyRigidBodyAwake();
     if (Error <= Tolerance)
     {
+        ResetAngularBlockageTracking();
         AngularNoProgressSeconds = 0.0f;
         BestAngularErrorDegrees = Error;
         if (!bAwake)
@@ -1394,6 +1399,11 @@ bool UMechanismActuatorComponent::UpdateAngularPositionMotion(const float DeltaT
         }
         // Without Force Stop, let the spring/damper settle and sleep naturally.
         return false;
+    }
+
+    if (TrySleepOnAngularBlockage())
+    {
+        return true;
     }
 
     const float Timeout = FMath::Max(0.1f, AngularStallTimeoutSeconds);
@@ -1574,7 +1584,7 @@ bool UMechanismActuatorComponent::TryForceStopAtAngularTarget()
 
 void UMechanismActuatorComponent::CompleteAngularPositionMotion(
     UPrimitiveComponent* MovingComponent, const FName BoneName,
-    const bool bForceFreeze, const bool bReachedTarget)
+    const bool bForceFreeze, const bool bReachedTarget, const bool bSleepBlockedBody)
 {
     if (!bWaitingForAngularTargetStop
         || Mode != EMechanismActuatorMode::AngularPosition
@@ -1596,12 +1606,24 @@ void UMechanismActuatorComponent::CompleteAngularPositionMotion(
     bAngularProgressInitialized = false;
     bAngularTargetReached = bReachedTarget;
     bAngularMotionBlocked = !bReachedTarget;
+    ResetAngularBlockageTracking();
     if (!bReachedTarget)
     {
         // Keep the joint/limits and velocity damping, but stop pushing into an
         // obstruction. The next command restores position drive in Arm...().
         SetOrientationDriveTwistAndSwing(false, false);
         SetAngularVelocityTarget(FVector::ZeroVector);
+        if (bSleepBlockedBody)
+        {
+            // Stop the drive first. Use native Chaos sleep, never synthesize a
+            // component Sleep delegate or relabel a blocked grip TargetReached.
+            if (FBodyInstance* Body = MovingComponent->GetBodyInstance(BoneName, false);
+                Body && Body->IsValidBodyInstance() && !Body->WeldParent)
+            {
+                Body->PutInstanceToSleep();
+            }
+            if (CompletedCommand != MotionCommandRevision || bComponentFrozen || !bActuatorInitialized) return;
+        }
     }
     UE_CLOG(bLogActuatorOperations, LogMechanismActuator, Log,
         TEXT("[ActuatorDriven] Angular motion completed: Actuator='%s', Child='%s', Bone='%s', CommandedState=%s, CurrentAngle=%.3f, PhysicalTarget=%.3f, ForceFreeze=%s, FreezeOnRotationStopped=%s, Result=%s. Broadcasting completion events before freeze."),
@@ -1874,6 +1896,7 @@ void UMechanismActuatorComponent::ReceiveRotateToEnd_Implementation(
 
 void UMechanismActuatorComponent::SetComponentFrozen(const bool bFrozen)
 {
+    ResetAngularBlockageTracking();
     ResetForceSleepTracking();
     bComponentFrozen = bFrozen;
     bComponentSleepFrozen = bFrozen;
